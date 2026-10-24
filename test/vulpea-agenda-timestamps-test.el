@@ -228,6 +228,27 @@
         '("keep.org")))
       (should (= filter-count 1)))))
 
+(ert-deftest vulpea-agenda-timestamps-test-filter-collapses-reentry ()
+  "A recursive agenda-files lookup cannot start another filtering pass."
+  (let ((filter-count 0)
+        (vulpea-agenda-tags '("timestamp"))
+        (vulpea-agenda-timestamps--profile-data (list :future-from 20261025)))
+    (cl-letf (((symbol-function
+                'vulpea-agenda-timestamps--filter-note-paths-uncached)
+               (lambda (paths)
+                 (setq filter-count (1+ filter-count))
+                 (should (equal
+                          (vulpea-agenda-timestamps--filter-note-paths paths)
+                          paths))
+                 paths)))
+      (should (equal
+               (vulpea-agenda-timestamps--filter-note-paths '("event.org"))
+               '("event.org")))
+      (should (= filter-count 1))
+      (should (= (plist-get vulpea-agenda-timestamps--profile-data
+                            :suppressed-filter-calls)
+                 1)))))
+
 (ert-deftest vulpea-agenda-timestamps-test-filter-uses-future-relevance ()
   "Filtering retains a file with timestamps beyond the displayed span."
   (let ((vulpea-agenda-tags '("timestamp")))

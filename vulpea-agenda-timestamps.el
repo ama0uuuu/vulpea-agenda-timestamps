@@ -47,6 +47,9 @@
 (defvar vulpea-agenda-timestamps--filter-advice-running nil
   "Non-nil while the outermost path advice obtains raw Vulpea paths.")
 
+(defvar vulpea-agenda-timestamps--filter-running nil
+  "Non-nil while an outer timestamp path filter is evaluating candidates.")
+
 (defvar vulpea-agenda-timestamps-last-profile nil
   "Metrics from the most recent profiled agenda construction.")
 
@@ -263,7 +266,8 @@ also retained."
 
 (defun vulpea-agenda-timestamps--filter-note-paths (paths)
   "Return future-relevant Vulpea agenda PATHS, cached for one agenda run."
-  (if vulpea-agenda-timestamps--filter-advice-running
+  (if (or vulpea-agenda-timestamps--filter-advice-running
+          vulpea-agenda-timestamps--filter-running)
       (progn
         (vulpea-agenda-timestamps--profile-add :suppressed-filter-calls 1)
         paths)
@@ -271,7 +275,8 @@ also retained."
      (list 'filtered-paths paths vulpea-agenda-tags
            vulpea-agenda-timestamps-tag)
      (lambda ()
-       (vulpea-agenda-timestamps--filter-note-paths-uncached paths)))))
+       (let ((vulpea-agenda-timestamps--filter-running t))
+         (vulpea-agenda-timestamps--filter-note-paths-uncached paths))))))
 
 (defun vulpea-agenda-timestamps--agenda-run-advice
     (original-function &rest args)

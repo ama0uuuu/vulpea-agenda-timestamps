@@ -31,3 +31,5 @@ the project intends to follow [Semantic Versioning](https://semver.org/).
   same timestamp candidate files.
 - A re-entrancy barrier that collapses stale or duplicate advice layers to one
   filtering pass and reports how many nested passes were suppressed.
+- A filter-level re-entrancy barrier for recursive agenda-file lookups triggered
+  while candidate files are being inspected.
