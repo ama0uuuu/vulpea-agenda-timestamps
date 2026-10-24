@@ -172,16 +172,22 @@ repair them automatically.
 Define "stale" explicitly. A timestamp before today may still matter to:
 
 - historical agenda commands;
-- overdue scheduled items;
-- overdue deadlines and warning periods;
 - repeating timestamps;
 - timestamp ranges; or
 - custom agenda behavior.
 
+`SCHEDULED` and `DEADLINE` timestamps are outside this cleanup command's scope.
+They are handled by the separate TODO-tag workflow and must neither retain nor
+lose the package-owned ordinary-timestamp tag. The cleanup predicate does not
+inspect TODO states; the supported workflow assumes completed timestamped
+entries use those excluded planning forms.
+
 Safe defaults are:
 
 - remove the tag only when the result is unambiguous;
-- retain repeating, scheduled, deadline, and otherwise ambiguous entries;
+- retain repeating and otherwise ambiguous ordinary timestamp entries;
+- ignore `SCHEDULED` and `DEADLINE` timestamps when deciding whether the
+  ordinary-timestamp tag is needed;
 - document whether historical agenda discovery is supported; and
 - prefer a false positive, which costs performance, over a false negative,
   which hides an agenda entry.

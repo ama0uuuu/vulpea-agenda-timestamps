@@ -14,8 +14,14 @@ The design builds on two existing packages:
   rules applied to the current buffer.
 
 The extension will maintain a file tag for notes containing potentially
-relevant active timestamps, then perform a date-aware check before returning
-those files to Org Agenda.
+relevant ordinary active timestamps, then perform a date-aware check before
+returning those files to Org Agenda.
+
+`SCHEDULED` and `DEADLINE` timestamps are deliberately outside this package's
+scope. In the intended workflow they occur only on unfinished TODO entries, so
+`vulpea-auto-tag` already makes their files discoverable through the `todo`
+tag. Completed timestamped entries also use those planning forms. The timestamp
+extension therefore does not need to inspect TODO states.
 
 ## Core model
 
@@ -55,8 +61,8 @@ Add a rule compatible with `vulpea-auto-tag-rules`. On save, it should:
 4. Remove the tag when no candidate exists.
 
 Use Org's parser rather than a regular expression. The parser is needed to
-distinguish active timestamps, inactive timestamps, ranges, planning lines,
-repeaters, comments, and archived content.
+distinguish ordinary active timestamps from inactive timestamps and planning
+timestamps, and to recognize ranges, repeaters, comments, and archived content.
 
 The rule will conceptually return:
 
@@ -80,11 +86,8 @@ The first implementation should account for:
 
 - ordinary active timestamps written with angle brackets;
 - active timestamp ranges;
-- `SCHEDULED` timestamps;
-- `DEADLINE` timestamps and warning periods;
 - repeating timestamps;
-- overdue scheduled or deadline entries;
-- completed TODO entries;
+- exclusion of `SCHEDULED` and `DEADLINE` planning timestamps;
 - archived and commented subtrees; and
 - inactive timestamps written with square brackets.
 
@@ -94,9 +97,12 @@ Safe initial behavior:
 - Include a range whose relevant end is today or later.
 - Always retain repeating active timestamps unless their Org semantics prove
   that they have ended.
-- Retain unfinished overdue planning entries when Org would display them.
+- Ignore `SCHEDULED` and `DEADLINE` timestamps; the TODO-tag workflow owns
+  discovery of those files.
 - Ignore inactive timestamps.
-- Follow Org's configured rules for done, archived, and commented entries.
+- Do not inspect TODO states. Under the supported workflow, completed
+  timestamped entries use excluded planning timestamps.
+- Follow the chosen policy for archived and commented entries.
 
 The exact filter should eventually accept the agenda's requested start and end
 dates rather than assuming every command displays today. This is required for
@@ -202,7 +208,8 @@ The command should be safe to rerun.
 - Implement pure functions for classifying Org timestamp elements.
 - Implement a buffer-level candidate predicate.
 - Define date-boundary and timezone behavior.
-- Test ordinary, inactive, ranged, repeating, scheduled, and deadline cases.
+- Test ordinary, inactive, ranged, and repeating cases, plus explicit exclusion
+  of `SCHEDULED` and `DEADLINE` timestamps.
 
 ### Phase 2: automatic tag maintenance
 
@@ -245,9 +252,9 @@ Unit tests should cover:
 - active and inactive timestamps;
 - single timestamps and ranges;
 - repeaters;
-- scheduled and deadline entries;
-- overdue planning entries;
-- done, archived, and commented headings;
+- exclusion of scheduled and deadline entries;
+- confirmation that TODO state does not affect ordinary timestamp selection;
+- archived and commented headings;
 - files containing multiple timestamp kinds; and
 - behavior at day and timezone boundaries.
 
@@ -270,11 +277,8 @@ that irrelevant files never reach the expensive Org Agenda processing stage.
 
 1. Whether historical agenda commands must discover timestamps whose candidate
    tags were previously removed.
-2. How closely the filter must reproduce Org's deadline-warning and overdue
-   scheduling options.
-3. Whether done headings containing ordinary active timestamps remain eligible.
-4. Whether archived subtrees are always excluded or follow user configuration.
-5. Whether agenda-time persistent cleanup is supported and, if so, whether it
+2. Whether archived subtrees are always excluded or follow user configuration.
+3. Whether agenda-time persistent cleanup is supported and, if so, whether it
    is disabled by default.
-6. Whether this functionality belongs in a standalone package or as an
+4. Whether this functionality belongs in a standalone package or as an
    extension contributed to one of the existing Vulpea packages.
