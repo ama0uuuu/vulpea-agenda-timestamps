@@ -35,15 +35,15 @@ Display final results
 Prefer separate commands rather than multiple hidden prefix-argument modes:
 
 ```elisp
-PACKAGE-cleanup-preview
-PACKAGE-cleanup-apply
-PACKAGE-reindex
+vulpea-agenda-timestamps-cleanup-preview
+vulpea-agenda-timestamps-cleanup-apply
+vulpea-agenda-timestamps-reindex
 ```
 
-- `PACKAGE-cleanup-preview` never writes files.
-- `PACKAGE-cleanup-apply` previews, requests confirmation, and then applies
-  approved changes.
-- `PACKAGE-reindex` performs a broader initial or repair scan.
+- `vulpea-agenda-timestamps-cleanup-preview` never writes files.
+- `vulpea-agenda-timestamps-cleanup-apply` previews, requests confirmation, and
+  then applies approved changes.
+- `vulpea-agenda-timestamps-reindex` performs a broader initial or repair scan.
 
 ## Required safeguards
 
@@ -122,10 +122,10 @@ Saving invokes `before-save-hook`, including automatic tag rules. Protect the
 cleanup command from recursively starting itself:
 
 ```elisp
-(defvar PACKAGE--cleanup-in-progress nil)
+(defvar vulpea-agenda-timestamps--cleanup-in-progress nil)
 
-(unless PACKAGE--cleanup-in-progress
-  (let ((PACKAGE--cleanup-in-progress t))
+(unless vulpea-agenda-timestamps--cleanup-in-progress
+  (let ((vulpea-agenda-timestamps--cleanup-in-progress t))
     ...))
 ```
 

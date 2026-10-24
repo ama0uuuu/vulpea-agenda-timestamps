@@ -1,14 +1,16 @@
-# My Package
+# vulpea-agenda-timestamps
 
-A minimal, general-purpose project template for an Emacs Lisp package.
+An Emacs package for reducing Org Agenda file scanning through Vulpea's indexed
+tags and relevant ordinary active timestamps.
 
-Before using it, replace `my-package` in file names and source code, then fill
-in the author, URL, description, dependencies, keywords, and license details.
+`SCHEDULED` and `DEADLINE` timestamps are intentionally excluded because the
+intended workflow discovers their files through `vulpea-auto-tag` and its
+`todo` tag.
 
 ## Development
 
-The template declares Emacs 29.1 as its minimum version. Change that version
-to match the APIs used by the finished package.
+The package currently declares Emacs 29.1 as its minimum version. This may be
+adjusted as implementation dependencies become clear.
 
 Run the test suite in an isolated Emacs process:
 
@@ -26,10 +28,11 @@ make checkdoc
 ## Repository layout
 
 ```text
-my-package.el                Package entry point and public API
+vulpea-agenda-timestamps.el Package entry point and public API
 test/                        ERT tests and batch runner
 Makefile                     Local and CI commands
 .github/workflows/ci.yml     Continuous integration
+docs/                        Design and cleanup-safety specifications
 ```
 
 ## License

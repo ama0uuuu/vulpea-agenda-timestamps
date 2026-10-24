@@ -1,5 +1,5 @@
 EMACS ?= emacs
-ELISP := my-package.el
+ELISP := vulpea-agenda-timestamps.el
 
 .PHONY: all test compile checkdoc clean
 

@@ -187,7 +187,7 @@ The save hook only processes files as they are saved. Provide a one-time command
 to initialize existing notes, conceptually:
 
 ```text
-M-x PACKAGE-NAME-reindex
+M-x vulpea-agenda-timestamps-reindex
 ```
 
 It should:
