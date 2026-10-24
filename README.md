@@ -40,10 +40,12 @@ Finally, enable both agenda modes:
 `vulpea-agenda-timestamps-mode` filters only paths contributed by
 `vulpea-agenda`.  Files listed directly in `org-agenda-files` remain untouched.
 A stale timestamp-tagged file is also retained when it carries another tag in
-`vulpea-agenda-tags`, such as `todo`.  Daily, weekly, monthly, future, and
-custom agenda spans are filtered against their requested date interval.
-Database queries and file inspections are reused when Org asks for the agenda
-files more than once during the same agenda construction.
+`vulpea-agenda-tags`, such as `todo`.  Timestamp-only files are retained when
+they contain an ordinary active timestamp today or in the future, even when it
+falls beyond the currently displayed agenda span.  Past-only files are
+filtered out.  Complete filtering results, database queries, and file
+inspections are reused when Org asks for agenda files more than once during the
+same agenda construction.
 
 ## Maintenance
 
@@ -76,9 +78,10 @@ M-x org-agenda
 M-x vulpea-agenda-timestamps-profile-report
 ```
 
-The report separates total agenda, candidate-query, timestamp-filter, and file
-parsing times.  It also reports input paths, timestamp candidates, candidates
-protected by other tags, unique files parsed, and candidates eliminated.
+The report shows the rolling future-relevance boundary and separates total
+agenda, candidate-query, timestamp-filter, and file parsing times.  It also
+reports input paths, timestamp candidates, candidates protected by other tags,
+unique files parsed, and candidates eliminated.
 
 To evaluate persistent stale-tag cleanup, save the first report, run
 `vulpea-agenda-timestamps-cleanup-stale-tags`, and profile the same agenda

@@ -24,3 +24,5 @@ the project intends to follow [Semantic Versioning](https://semver.org/).
 - Opt-in per-agenda profiling for database queries, filtering, unique file
   parsing, total runtime, cache behavior, and path elimination counts, with a
   report that guides before/after stale-cleanup measurements.
+- Rolling relevance based on today and all future timestamps instead of the
+  displayed agenda interval, plus caching of the complete filtered path result.

@@ -104,9 +104,9 @@ Safe initial behavior:
   timestamped entries use excluded planning timestamps.
 - Follow the chosen policy for archived and commented entries.
 
-The exact filter should eventually accept the agenda's requested start and end
-dates rather than assuming every command displays today. This is required for
-weekly, monthly, future, and custom agenda commands.
+The exact filter uses a rolling boundary of today and retains all future
+timestamps, even beyond the displayed agenda span.  This intentionally favors
+future discoverability over minimizing the file set for one particular view.
 
 ## Why save-time tagging remains useful
 
@@ -220,7 +220,7 @@ The command should be safe to rerun.
 ### Phase 3: agenda integration
 
 - Query timestamp-tagged paths through Vulpea.
-- Filter candidates for the requested agenda interval.
+- Filter past-only candidates while retaining today and all future timestamps.
 - Integrate with the `org-agenda-files` advice.
 - Deduplicate ordinary, TODO-tagged, and timestamp-tagged paths.
 - Add a per-agenda-run cache.

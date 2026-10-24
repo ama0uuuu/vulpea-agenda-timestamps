@@ -35,9 +35,6 @@
 
 (defvar vulpea-agenda-tags)
 
-(defvar vulpea-agenda-timestamps--agenda-interval nil
-  "Inclusive agenda interval as a cons of sortable date keys.")
-
 (defvar vulpea-agenda-timestamps--agenda-cache nil
   "Memoization table dynamically bound during one agenda construction.")
 
@@ -127,23 +124,17 @@ timestamps are retained regardless of their base date."
   (vulpea-agenda-timestamps--timestamp-in-range-p
    timestamp today-key most-positive-fixnum))
 
-(defun vulpea-agenda-timestamps-buffer-relevant-in-range-p
-    (start-key end-key)
-  "Return non-nil if an active timestamp overlaps START-KEY through END-KEY."
-  (org-element-map (org-element-parse-buffer) 'timestamp
-    (lambda (timestamp)
-      (vulpea-agenda-timestamps--timestamp-in-range-p
-       timestamp start-key end-key))
-    nil t))
-
 (defun vulpea-agenda-timestamps-buffer-relevant-p (&optional now)
   "Return non-nil if the current Org buffer has a relevant timestamp.
 Only ordinary active timestamps are considered.  Org represents `SCHEDULED'
 and `DEADLINE' values as properties of planning elements, so they are not
 visited as ordinary timestamp objects.  NOW defaults to the current time and
 is available primarily for deterministic tests."
-  (vulpea-agenda-timestamps-buffer-relevant-in-range-p
-   (vulpea-agenda-timestamps--today-key now) most-positive-fixnum))
+  (let ((today-key (vulpea-agenda-timestamps--today-key now)))
+    (org-element-map (org-element-parse-buffer) 'timestamp
+      (lambda (timestamp)
+        (vulpea-agenda-timestamps--timestamp-relevant-p timestamp today-key))
+      nil t)))
 
 (defun vulpea-agenda-timestamps--inspect-file (path predicate)
   "Call PREDICATE in PATH's current or temporary Org buffer."
@@ -167,23 +158,6 @@ and display a warning if it cannot be inspected."
   (condition-case error-data
       (vulpea-agenda-timestamps--inspect-file
        path (lambda () (vulpea-agenda-timestamps-buffer-relevant-p now)))
-    (error
-     (display-warning
-      'vulpea-agenda-timestamps
-      (format "Could not inspect %s; retaining it: %s"
-              path (error-message-string error-data)))
-     t)))
-
-(defun vulpea-agenda-timestamps-file-relevant-in-range-p
-    (path start-key end-key)
-  "Return non-nil when PATH has a timestamp in START-KEY through END-KEY.
-Retain PATH conservatively and display a warning if it cannot be inspected."
-  (condition-case error-data
-      (vulpea-agenda-timestamps--inspect-file
-       path
-       (lambda ()
-         (vulpea-agenda-timestamps-buffer-relevant-in-range-p
-          start-key end-key)))
     (error
      (display-warning
       'vulpea-agenda-timestamps
@@ -226,7 +200,7 @@ to a hash table."
    (lambda (tag) (string= tag vulpea-agenda-timestamps-tag))
    vulpea-agenda-tags))
 
-(defun vulpea-agenda-timestamps--filter-note-paths (paths)
+(defun vulpea-agenda-timestamps--filter-note-paths-uncached (paths)
   "Filter stale timestamp-only files from Vulpea agenda PATHS.
 Files carrying another tag from `vulpea-agenda-tags' are retained without
 timestamp inspection.  PATHS not carrying the configured timestamp tag are
@@ -262,21 +236,15 @@ also retained."
                         :inspected-paths 1)
                        (let ((relevant
                               (vulpea-agenda-timestamps--memoize
-                               (list 'file-relevant path
-                                     vulpea-agenda-timestamps--agenda-interval)
+                               (list 'file-relevant path)
                                (lambda ()
                                  (vulpea-agenda-timestamps--profile-add
                                   :parsed-files 1)
                                  (vulpea-agenda-timestamps--profile-time
                                   :parse-seconds
                                   (lambda ()
-                                    (if vulpea-agenda-timestamps--agenda-interval
-                                        (vulpea-agenda-timestamps-file-relevant-in-range-p
-                                         path
-                                         (car vulpea-agenda-timestamps--agenda-interval)
-                                         (cdr vulpea-agenda-timestamps--agenda-interval))
-                                      (vulpea-agenda-timestamps-file-relevant-p
-                                       path))))))))
+                                    (vulpea-agenda-timestamps-file-relevant-p
+                                     path)))))))
                          (if relevant
                              (progn
                                (vulpea-agenda-timestamps--profile-add
@@ -287,55 +255,27 @@ also retained."
                            nil)))))
                  paths)))
            (vulpea-agenda-timestamps--profile-add
-            :output-paths (length filtered))
+           :output-paths (length filtered))
            filtered))))))
 
-(defun vulpea-agenda-timestamps--absolute-day-key (absolute-day)
-  "Convert Gregorian ABSOLUTE-DAY to a sortable calendar-date key."
-  (pcase-let ((`(,month ,day ,year)
-               (calendar-gregorian-from-absolute absolute-day)))
-    (vulpea-agenda-timestamps--date-key year month day)))
-
-(defun vulpea-agenda-timestamps--agenda-list-interval
-    (arg start-day span)
-  "Return the inclusive interval requested by agenda list arguments.
-ARG, START-DAY, and SPAN follow `org-agenda-list'."
-  (when org-agenda-overriding-arguments
-    (setq arg (car org-agenda-overriding-arguments)
-          start-day (nth 1 org-agenda-overriding-arguments)
-          span (nth 2 org-agenda-overriding-arguments)))
-  (when (and (integerp arg) (> arg 0))
-    (setq span arg))
-  (setq start-day (or start-day org-agenda-start-day))
-  (when (stringp start-day)
-    (setq start-day (time-to-days (org-read-date nil t start-day))))
-  (let* ((span (org-agenda-ndays-to-span (or span org-agenda-span)))
-         (start-day (or start-day (org-today)))
-         (days (org-agenda-span-to-ndays span start-day))
-         (weekday (and (memq days '(7 14)) org-agenda-start-on-weekday))
-         (start (if (not weekday)
-                    start-day
-                  (let* ((actual (calendar-day-of-week
-                                  (calendar-gregorian-from-absolute start-day)))
-                         (difference (- actual weekday)))
-                    (- start-day
-                       (+ (if (< difference 0) 7 0) difference))))))
-    (cons (vulpea-agenda-timestamps--absolute-day-key start)
-          (vulpea-agenda-timestamps--absolute-day-key
-           (+ start days -1)))))
+(defun vulpea-agenda-timestamps--filter-note-paths (paths)
+  "Return future-relevant Vulpea agenda PATHS, cached for one agenda run."
+  (vulpea-agenda-timestamps--memoize
+   (list 'filtered-paths paths vulpea-agenda-tags
+         vulpea-agenda-timestamps-tag)
+   (lambda ()
+     (vulpea-agenda-timestamps--filter-note-paths-uncached paths))))
 
 (defun vulpea-agenda-timestamps--agenda-list-advice
     (original-function &optional arg start-day span with-hour)
-  "Call ORIGINAL-FUNCTION with a run-local interval and cache.
+  "Call ORIGINAL-FUNCTION with a run-local cache and optional profile.
 ARG, START-DAY, SPAN, and WITH-HOUR are the arguments of `org-agenda-list'."
-  (let* ((interval (vulpea-agenda-timestamps--agenda-list-interval
-                    arg start-day span))
-         (vulpea-agenda-timestamps--agenda-interval interval)
-        (vulpea-agenda-timestamps--agenda-cache
+  (let* ((vulpea-agenda-timestamps--agenda-cache
          (make-hash-table :test #'equal))
          (vulpea-agenda-timestamps--profile-data
           (and vulpea-agenda-timestamps-profiling-mode
-               (list :interval interval)))
+               (list :future-from
+                     (vulpea-agenda-timestamps--today-key))))
          (started (and vulpea-agenda-timestamps--profile-data
                        (current-time))))
     (unwind-protect
@@ -385,8 +325,7 @@ After constructing an agenda, use
 
 (defun vulpea-agenda-timestamps--format-profile (profile)
   "Format PROFILE as a human-readable performance report."
-  (let* ((interval (plist-get profile :interval))
-         (candidates (vulpea-agenda-timestamps--profile-number
+  (let* ((candidates (vulpea-agenda-timestamps--profile-number
                       profile :timestamp-candidates))
          (eliminated (vulpea-agenda-timestamps--profile-number
                       profile :eliminated-paths))
@@ -396,7 +335,7 @@ After constructing an agenda, use
             (* 100.0 (/ (float eliminated) candidates)))))
     (format
      (concat "Vulpea agenda timestamp profile\n\n"
-             "Interval: %s through %s\n"
+             "Relevance: today and future (from %s)\n"
              "Total agenda: %.3f s\n"
              "Candidate queries: %.3f s (%d uncached queries)\n"
              "Timestamp filtering: %.3f s (%d calls)\n"
@@ -409,7 +348,7 @@ After constructing an agenda, use
              "Eliminated candidates: %d (%.1f%%)\n"
              "Output path evaluations: %d\n\n"
              "Cleanup signal: %s\n")
-     (or (car interval) "unknown") (or (cdr interval) "unknown")
+     (or (plist-get profile :future-from) "unknown")
      (vulpea-agenda-timestamps--profile-number profile :total-seconds)
      (vulpea-agenda-timestamps--profile-number profile :query-seconds)
      (vulpea-agenda-timestamps--profile-number profile :query-count)

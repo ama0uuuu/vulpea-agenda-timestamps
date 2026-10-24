@@ -23,15 +23,6 @@
     (vulpea-agenda-timestamps-buffer-relevant-p
      vulpea-agenda-timestamps-test--today)))
 
-(defun vulpea-agenda-timestamps-test--relevant-in-range-p
-    (contents start-key end-key)
-  "Return whether CONTENTS overlaps START-KEY through END-KEY."
-  (with-temp-buffer
-    (org-mode)
-    (insert contents)
-    (vulpea-agenda-timestamps-buffer-relevant-in-range-p
-     start-key end-key)))
-
 (ert-deftest vulpea-agenda-timestamps-test-default-tag ()
   "The default candidate tag is `timestamp'."
   (should (equal vulpea-agenda-timestamps-tag "timestamp")))
@@ -91,22 +82,6 @@
   (should (vulpea-agenda-timestamps-test--relevant-p
            (concat "* Old\n  <2026-10-20 Tue>\n"
                    "* Future\n  <2026-11-01 Sun>\n"))))
-
-(ert-deftest vulpea-agenda-timestamps-test-timestamp-inside-range ()
-  "A timestamp inside the requested agenda interval is retained."
-  (should (vulpea-agenda-timestamps-test--relevant-in-range-p
-           "* Event\n  <2026-10-27 Tue>\n" 20261025 20261031)))
-
-(ert-deftest vulpea-agenda-timestamps-test-timestamp-after-range ()
-  "A timestamp after the requested agenda interval is excluded."
-  (should-not (vulpea-agenda-timestamps-test--relevant-in-range-p
-               "* Event\n  <2026-11-01 Sun>\n" 20261025 20261031)))
-
-(ert-deftest vulpea-agenda-timestamps-test-range-overlaps-agenda ()
-  "A timestamp range crossing an agenda boundary is retained."
-  (should (vulpea-agenda-timestamps-test--relevant-in-range-p
-           "* Event\n  <2026-10-20 Tue>--<2026-10-26 Mon>\n"
-           20261025 20261031)))
 
 (ert-deftest vulpea-agenda-timestamps-test-auto-tag-rule-adds-tag ()
   "The automatic tagging rule adds the tag for a relevant buffer."
@@ -234,19 +209,14 @@
        (lambda (&rest _args) '("drop.org" "keep.org")) 'ignored)
       '("keep.org")))))
 
-(ert-deftest vulpea-agenda-timestamps-test-filter-uses-agenda-interval ()
-  "Filtering passes the current agenda interval to file inspection."
-  (let ((vulpea-agenda-tags '("timestamp"))
-        (vulpea-agenda-timestamps--agenda-interval
-         '(20261025 . 20261031)))
+(ert-deftest vulpea-agenda-timestamps-test-filter-uses-future-relevance ()
+  "Filtering retains a file with timestamps beyond the displayed span."
+  (let ((vulpea-agenda-tags '("timestamp")))
     (cl-letf (((symbol-function 'vulpea-agenda-timestamps--tagged-paths)
                (lambda (_tags) '("event.org")))
-              ((symbol-function
-                'vulpea-agenda-timestamps-file-relevant-in-range-p)
-               (lambda (path start-key end-key)
+              ((symbol-function 'vulpea-agenda-timestamps-file-relevant-p)
+               (lambda (path &optional _now)
                  (should (equal path "event.org"))
-                 (should (= start-key 20261025))
-                 (should (= end-key 20261031))
                  t)))
       (should (equal
                (vulpea-agenda-timestamps--filter-note-paths '("event.org"))
@@ -255,8 +225,6 @@
 (ert-deftest vulpea-agenda-timestamps-test-agenda-run-cache ()
   "Repeated filtering in one agenda run reuses queries and parsing."
   (let ((vulpea-agenda-tags '("timestamp"))
-        (vulpea-agenda-timestamps--agenda-interval
-         '(20261025 . 20261031))
         (vulpea-agenda-timestamps--agenda-cache
          (make-hash-table :test #'equal))
         (query-count 0)
@@ -269,8 +237,7 @@
                (lambda (&rest _args) t))
               ((symbol-function 'vulpea-note-path)
                (lambda (_note) "event.org"))
-              ((symbol-function
-                'vulpea-agenda-timestamps-file-relevant-in-range-p)
+              ((symbol-function 'vulpea-agenda-timestamps-file-relevant-p)
                (lambda (&rest _args)
                  (cl-incf inspection-count)
                  t)))
@@ -281,45 +248,26 @@
       (should (= query-count 1))
       (should (= inspection-count 1)))))
 
-(ert-deftest vulpea-agenda-timestamps-test-agenda-list-interval ()
-  "Agenda arguments produce an inclusive calendar-date interval."
-  (let ((org-agenda-overriding-arguments nil)
-        (org-agenda-start-day nil)
-        (org-agenda-start-on-weekday nil))
-    (should (equal
-             (vulpea-agenda-timestamps--agenda-list-interval
-              nil "2026-10-25" 7)
-             '(20261025 . 20261031)))))
-
 (ert-deftest vulpea-agenda-timestamps-test-agenda-list-advice-binds-state ()
-  "Agenda advice binds its interval and cache for the wrapped call."
-  (let ((org-agenda-overriding-arguments nil)
-        (org-agenda-start-day nil)
-        (org-agenda-start-on-weekday nil))
-    (should
-     (vulpea-agenda-timestamps--agenda-list-advice
-      (lambda (&rest _args)
-        (and (equal vulpea-agenda-timestamps--agenda-interval
-                    '(20261025 . 20261031))
-             (hash-table-p vulpea-agenda-timestamps--agenda-cache)))
-      nil "2026-10-25" 7 nil))))
+  "Agenda advice binds its cache for the wrapped call."
+  (should
+   (vulpea-agenda-timestamps--agenda-list-advice
+    (lambda (&rest _args)
+      (hash-table-p vulpea-agenda-timestamps--agenda-cache))
+    nil "2026-10-25" 7 nil)))
 
 (ert-deftest vulpea-agenda-timestamps-test-profile-counts-filter-stages ()
   "Profiling counts candidates retained and eliminated by each stage."
   (let ((vulpea-agenda-tags '("todo" "timestamp"))
-        (vulpea-agenda-timestamps--agenda-interval
-         '(20261025 . 20261031))
         (vulpea-agenda-timestamps--agenda-cache
          (make-hash-table :test #'equal))
-        (vulpea-agenda-timestamps--profile-data
-         (list :interval '(20261025 . 20261031))))
+        (vulpea-agenda-timestamps--profile-data (list :future-from 20261025)))
     (cl-letf (((symbol-function 'vulpea-agenda-timestamps--tagged-paths)
                (lambda (tags)
                  (if (equal tags '("timestamp"))
                      '("protected.org" "keep.org" "drop.org")
                    '("protected.org"))))
-              ((symbol-function
-                'vulpea-agenda-timestamps-file-relevant-in-range-p)
+              ((symbol-function 'vulpea-agenda-timestamps-file-relevant-p)
                (lambda (path &rest _args) (equal path "keep.org"))))
       (should
        (equal
@@ -356,8 +304,8 @@
             'agenda-result)
           nil "2026-10-25" 7 nil)
          'agenda-result))
-    (should (equal (plist-get vulpea-agenda-timestamps-last-profile :interval)
-                   '(20261025 . 20261031)))
+    (should (numberp
+             (plist-get vulpea-agenda-timestamps-last-profile :future-from)))
     (should (= (plist-get vulpea-agenda-timestamps-last-profile :input-paths)
                2))
     (should (numberp
@@ -368,12 +316,14 @@
   "Profile reports expose timings, counts, and a cleanup signal."
   (let ((report
          (vulpea-agenda-timestamps--format-profile
-          '(:interval (20261025 . 20261031)
+          '(:future-from 20261025
             :total-seconds 1.0 :query-seconds 0.1 :query-count 2
             :filter-seconds 0.2 :filter-calls 1 :parse-seconds 0.1
             :parsed-files 4 :input-paths 10 :timestamp-candidates 5
             :protected-paths 1 :inspected-paths 4 :relevant-paths 2
             :eliminated-paths 2 :output-paths 8))))
+    (should (string-match-p "Relevance: today and future" report))
+    (should-not (string-match-p "Interval:" report))
     (should (string-match-p "Eliminated candidates: 2 (40.0%)" report))
     (should (string-match-p "compare another profile" report))))
 
