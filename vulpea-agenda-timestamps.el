@@ -44,6 +44,9 @@
 (defvar vulpea-agenda-timestamps--profile-data nil
   "Profiling data dynamically bound during one agenda construction.")
 
+(defvar vulpea-agenda-timestamps--filter-advice-running nil
+  "Non-nil while the outermost path advice obtains raw Vulpea paths.")
+
 (defvar vulpea-agenda-timestamps-last-profile nil
   "Metrics from the most recent profiled agenda construction.")
 
@@ -260,11 +263,15 @@ also retained."
 
 (defun vulpea-agenda-timestamps--filter-note-paths (paths)
   "Return future-relevant Vulpea agenda PATHS, cached for one agenda run."
-  (vulpea-agenda-timestamps--memoize
-   (list 'filtered-paths paths vulpea-agenda-tags
-         vulpea-agenda-timestamps-tag)
-   (lambda ()
-     (vulpea-agenda-timestamps--filter-note-paths-uncached paths))))
+  (if vulpea-agenda-timestamps--filter-advice-running
+      (progn
+        (vulpea-agenda-timestamps--profile-add :suppressed-filter-calls 1)
+        paths)
+    (vulpea-agenda-timestamps--memoize
+     (list 'filtered-paths paths vulpea-agenda-tags
+           vulpea-agenda-timestamps-tag)
+     (lambda ()
+       (vulpea-agenda-timestamps--filter-note-paths-uncached paths)))))
 
 (defun vulpea-agenda-timestamps--agenda-run-advice
     (original-function &rest args)
@@ -293,8 +300,12 @@ custom block agendas, which prepare files before running their individual
 (defun vulpea-agenda-timestamps--filter-note-paths-advice
     (original-function &rest args)
   "Filter paths returned by ORIGINAL-FUNCTION called with ARGS."
-  (vulpea-agenda-timestamps--filter-note-paths
-   (apply original-function args)))
+  (if vulpea-agenda-timestamps--filter-advice-running
+      (apply original-function args)
+    (let (paths)
+      (let ((vulpea-agenda-timestamps--filter-advice-running t))
+        (setq paths (apply original-function args)))
+      (vulpea-agenda-timestamps--filter-note-paths paths))))
 
 ;;;###autoload
 (define-minor-mode vulpea-agenda-timestamps-mode
@@ -351,6 +362,7 @@ After constructing an agenda, use
              "Total agenda: %.3f s\n"
              "Candidate queries: %.3f s (%d uncached queries)\n"
              "Timestamp filtering: %.3f s (%d calls)\n"
+             "Suppressed nested filters: %d\n"
              "File parsing: %.3f s (%d unique files)\n\n"
              "Input path evaluations: %d\n"
              "Timestamp candidates: %d\n"
@@ -366,6 +378,8 @@ After constructing an agenda, use
      (vulpea-agenda-timestamps--profile-number profile :query-count)
      (vulpea-agenda-timestamps--profile-number profile :filter-seconds)
      (vulpea-agenda-timestamps--profile-number profile :filter-calls)
+     (vulpea-agenda-timestamps--profile-number
+      profile :suppressed-filter-calls)
      (vulpea-agenda-timestamps--profile-number profile :parse-seconds)
      (vulpea-agenda-timestamps--profile-number profile :parsed-files)
      (vulpea-agenda-timestamps--profile-number profile :input-paths)

@@ -209,6 +209,25 @@
        (lambda (&rest _args) '("drop.org" "keep.org")) 'ignored)
       '("keep.org")))))
 
+(ert-deftest vulpea-agenda-timestamps-test-filter-advice-collapses-nesting ()
+  "Nested copies of the advice perform one outer filtering pass."
+  (let ((filter-count 0)
+        (vulpea-agenda-tags '("timestamp"))
+        (vulpea-agenda-timestamps--profile-data (list :future-from 20261025)))
+    (cl-letf (((symbol-function
+                'vulpea-agenda-timestamps--filter-note-paths-uncached)
+               (lambda (paths)
+                 (setq filter-count (1+ filter-count))
+                 (cdr paths))))
+      (should
+       (equal
+        (vulpea-agenda-timestamps--filter-note-paths-advice
+         (lambda ()
+           (vulpea-agenda-timestamps--filter-note-paths-advice
+            (lambda () '("drop.org" "keep.org")))))
+        '("keep.org")))
+      (should (= filter-count 1)))))
+
 (ert-deftest vulpea-agenda-timestamps-test-filter-uses-future-relevance ()
   "Filtering retains a file with timestamps beyond the displayed span."
   (let ((vulpea-agenda-tags '("timestamp")))
@@ -334,11 +353,13 @@
           '(:future-from 20261025
             :total-seconds 1.0 :query-seconds 0.1 :query-count 2
             :filter-seconds 0.2 :filter-calls 1 :parse-seconds 0.1
+            :suppressed-filter-calls 3
             :parsed-files 4 :input-paths 10 :timestamp-candidates 5
             :protected-paths 1 :inspected-paths 4 :relevant-paths 2
             :eliminated-paths 2 :output-paths 8))))
     (should (string-match-p "Relevance: today and future" report))
     (should-not (string-match-p "Interval:" report))
+    (should (string-match-p "Suppressed nested filters: 3" report))
     (should (string-match-p "Eliminated candidates: 2 (40.0%)" report))
     (should (string-match-p "compare another profile" report))))
 
