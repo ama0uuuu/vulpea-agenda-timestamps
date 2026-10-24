@@ -12,3 +12,5 @@ the project intends to follow [Semantic Versioning](https://semver.org/).
 - Initial package structure and ERT test runner.
 - Detection of relevant ordinary active timestamps, including ranges and
   repeaters, while excluding inactive and planning timestamps.
+- A `vulpea-auto-tag-rules`-compatible rule for adding or removing the
+  configurable timestamp tag on save.

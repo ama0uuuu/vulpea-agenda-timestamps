@@ -7,6 +7,29 @@ tags and relevant ordinary active timestamps.
 intended workflow discovers their files through `vulpea-auto-tag` and its
 `todo` tag.
 
+## Configuration
+
+Register the timestamp rule with `vulpea-auto-tag`:
+
+```elisp
+(with-eval-after-load 'vulpea-auto-tag
+  (add-to-list 'vulpea-auto-tag-rules
+               #'vulpea-agenda-timestamps-auto-tag-rule))
+```
+
+Enable `vulpea-auto-tag-sync-mode` in the Org buffers managed by Vulpea.  Its
+save hook will add the `timestamp` tag when a relevant ordinary active
+timestamp exists and remove the tag otherwise.
+
+Configure `vulpea-agenda` to query both automatic tags:
+
+```elisp
+(setq vulpea-agenda-tags '("todo" "timestamp"))
+```
+
+Customize `vulpea-agenda-timestamps-tag` if a different timestamp tag is
+preferred, and use the same value in `vulpea-agenda-tags`.
+
 ## Development
 
 The package requires Emacs 30.2 or newer.

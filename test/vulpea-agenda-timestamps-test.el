@@ -5,6 +5,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cl-lib)
 (require 'vulpea-agenda-timestamps)
 
 (defconst vulpea-agenda-timestamps-test--today
@@ -78,6 +79,31 @@
   (should (vulpea-agenda-timestamps-test--relevant-p
            (concat "* Old\n  <2026-10-20 Tue>\n"
                    "* Future\n  <2026-11-01 Sun>\n"))))
+
+(ert-deftest vulpea-agenda-timestamps-test-auto-tag-rule-adds-tag ()
+  "The automatic tagging rule adds the tag for a relevant buffer."
+  (cl-letf (((symbol-function
+              'vulpea-agenda-timestamps-buffer-relevant-p)
+             (lambda (&optional _now) t)))
+    (should (equal (vulpea-agenda-timestamps-auto-tag-rule)
+                   '(("timestamp") . nil)))))
+
+(ert-deftest vulpea-agenda-timestamps-test-auto-tag-rule-removes-tag ()
+  "The automatic tagging rule removes the tag for an irrelevant buffer."
+  (cl-letf (((symbol-function
+              'vulpea-agenda-timestamps-buffer-relevant-p)
+             (lambda (&optional _now) nil)))
+    (should (equal (vulpea-agenda-timestamps-auto-tag-rule)
+                   '(nil . ("timestamp"))))))
+
+(ert-deftest vulpea-agenda-timestamps-test-auto-tag-rule-custom-tag ()
+  "The automatic tagging rule respects the configured tag name."
+  (let ((vulpea-agenda-timestamps-tag "calendar"))
+    (cl-letf (((symbol-function
+                'vulpea-agenda-timestamps-buffer-relevant-p)
+               (lambda (&optional _now) t)))
+      (should (equal (vulpea-agenda-timestamps-auto-tag-rule)
+                     '(("calendar") . nil))))))
 
 (provide 'vulpea-agenda-timestamps-test)
 

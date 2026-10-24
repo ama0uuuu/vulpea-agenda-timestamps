@@ -77,6 +77,16 @@ is available primarily for deterministic tests."
         (vulpea-agenda-timestamps--timestamp-relevant-p timestamp today-key))
       nil t)))
 
+;;;###autoload
+(defun vulpea-agenda-timestamps-auto-tag-rule ()
+  "Return tag changes suitable for `vulpea-auto-tag-rules'.
+The return value is a cons cell whose car lists tags to add and whose cdr lists
+tags to remove.  Add `vulpea-agenda-timestamps-tag' when the current buffer has
+a relevant ordinary active timestamp; otherwise remove it."
+  (if (vulpea-agenda-timestamps-buffer-relevant-p)
+      (cons (list vulpea-agenda-timestamps-tag) nil)
+    (cons nil (list vulpea-agenda-timestamps-tag))))
+
 (defun vulpea-agenda-timestamps-version ()
   "Display the installed package version."
   (interactive)
