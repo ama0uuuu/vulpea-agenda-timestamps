@@ -26,3 +26,6 @@ the project intends to follow [Semantic Versioning](https://semver.org/).
   report that guides before/after stale-cleanup measurements.
 - Rolling relevance based on today and all future timestamps instead of the
   displayed agenda interval, plus caching of the complete filtered path result.
+- A shared cache boundary around whole agenda commands and custom block series,
+  preventing the preparation pass and individual blocks from reparsing the
+  same timestamp candidate files.

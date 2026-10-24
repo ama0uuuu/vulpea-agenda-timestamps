@@ -266,25 +266,29 @@ also retained."
    (lambda ()
      (vulpea-agenda-timestamps--filter-note-paths-uncached paths))))
 
-(defun vulpea-agenda-timestamps--agenda-list-advice
-    (original-function &optional arg start-day span with-hour)
-  "Call ORIGINAL-FUNCTION with a run-local cache and optional profile.
-ARG, START-DAY, SPAN, and WITH-HOUR are the arguments of `org-agenda-list'."
-  (let* ((vulpea-agenda-timestamps--agenda-cache
-         (make-hash-table :test #'equal))
-         (vulpea-agenda-timestamps--profile-data
-          (and vulpea-agenda-timestamps-profiling-mode
-               (list :future-from
-                     (vulpea-agenda-timestamps--today-key))))
-         (started (and vulpea-agenda-timestamps--profile-data
-                       (current-time))))
-    (unwind-protect
-        (funcall original-function arg start-day span with-hour)
-      (when vulpea-agenda-timestamps--profile-data
-        (vulpea-agenda-timestamps--profile-add
-         :total-seconds (float-time (time-subtract (current-time) started)))
-        (setq vulpea-agenda-timestamps-last-profile
-              (copy-tree vulpea-agenda-timestamps--profile-data))))))
+(defun vulpea-agenda-timestamps--agenda-run-advice
+    (original-function &rest args)
+  "Call ORIGINAL-FUNCTION with one cache and profile shared across ARGS.
+Nested agenda entry points reuse the surrounding state.  This is important for
+custom block agendas, which prepare files before running their individual
+`org-agenda-list' blocks."
+  (if (hash-table-p vulpea-agenda-timestamps--agenda-cache)
+      (apply original-function args)
+    (let* ((vulpea-agenda-timestamps--agenda-cache
+            (make-hash-table :test #'equal))
+           (vulpea-agenda-timestamps--profile-data
+            (and vulpea-agenda-timestamps-profiling-mode
+                 (list :future-from
+                       (vulpea-agenda-timestamps--today-key))))
+           (started (and vulpea-agenda-timestamps--profile-data
+                         (current-time))))
+      (unwind-protect
+          (apply original-function args)
+        (when vulpea-agenda-timestamps--profile-data
+          (vulpea-agenda-timestamps--profile-add
+           :total-seconds (float-time (time-subtract (current-time) started)))
+          (setq vulpea-agenda-timestamps-last-profile
+                (copy-tree vulpea-agenda-timestamps--profile-data)))))))
 
 (defun vulpea-agenda-timestamps--filter-note-paths-advice
     (original-function &rest args)
@@ -302,12 +306,20 @@ ARG, START-DAY, SPAN, and WITH-HOUR are the arguments of `org-agenda-list'."
         (require 'vulpea-agenda)
         (advice-add 'vulpea-agenda--get-note-paths :around
                     #'vulpea-agenda-timestamps--filter-note-paths-advice)
+        (advice-add 'org-agenda :around
+                    #'vulpea-agenda-timestamps--agenda-run-advice)
+        (advice-add 'org-agenda-run-series :around
+                    #'vulpea-agenda-timestamps--agenda-run-advice)
         (advice-add 'org-agenda-list :around
-                    #'vulpea-agenda-timestamps--agenda-list-advice))
+                    #'vulpea-agenda-timestamps--agenda-run-advice))
     (advice-remove 'vulpea-agenda--get-note-paths
                    #'vulpea-agenda-timestamps--filter-note-paths-advice)
+    (advice-remove 'org-agenda
+                   #'vulpea-agenda-timestamps--agenda-run-advice)
+    (advice-remove 'org-agenda-run-series
+                   #'vulpea-agenda-timestamps--agenda-run-advice)
     (advice-remove 'org-agenda-list
-                   #'vulpea-agenda-timestamps--agenda-list-advice)))
+                   #'vulpea-agenda-timestamps--agenda-run-advice)))
 
 ;;;###autoload
 (define-minor-mode vulpea-agenda-timestamps-profiling-mode

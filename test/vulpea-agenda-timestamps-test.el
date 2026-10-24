@@ -248,13 +248,28 @@
       (should (= query-count 1))
       (should (= inspection-count 1)))))
 
-(ert-deftest vulpea-agenda-timestamps-test-agenda-list-advice-binds-state ()
+(ert-deftest vulpea-agenda-timestamps-test-agenda-run-advice-binds-state ()
   "Agenda advice binds its cache for the wrapped call."
   (should
-   (vulpea-agenda-timestamps--agenda-list-advice
+   (vulpea-agenda-timestamps--agenda-run-advice
     (lambda (&rest _args)
       (hash-table-p vulpea-agenda-timestamps--agenda-cache))
     nil "2026-10-25" 7 nil)))
+
+(ert-deftest vulpea-agenda-timestamps-test-nested-agenda-reuses-state ()
+  "Custom agenda blocks reuse the outer run's cache and profile."
+  (let ((vulpea-agenda-timestamps-profiling-mode t)
+        outer-cache inner-cache)
+    (vulpea-agenda-timestamps--agenda-run-advice
+     (lambda ()
+       (setq outer-cache vulpea-agenda-timestamps--agenda-cache)
+       (vulpea-agenda-timestamps--agenda-run-advice
+        (lambda ()
+          (setq inner-cache vulpea-agenda-timestamps--agenda-cache)
+          (vulpea-agenda-timestamps--profile-add :filter-calls 1)))))
+    (should (eq outer-cache inner-cache))
+    (should (= (plist-get vulpea-agenda-timestamps-last-profile :filter-calls)
+               1))))
 
 (ert-deftest vulpea-agenda-timestamps-test-profile-counts-filter-stages ()
   "Profiling counts candidates retained and eliminated by each stage."
@@ -298,7 +313,7 @@
         (org-agenda-start-day nil)
         (org-agenda-start-on-weekday nil))
     (should
-     (eq (vulpea-agenda-timestamps--agenda-list-advice
+     (eq (vulpea-agenda-timestamps--agenda-run-advice
           (lambda (&rest _args)
             (vulpea-agenda-timestamps--profile-add :input-paths 2)
             'agenda-result)
