@@ -3,7 +3,7 @@ ELISP := vulpea-agenda-timestamps.el
 
 .PHONY: all test compile checkdoc clean
 
-all: test compile
+all: test compile checkdoc
 
 test:
 	$(EMACS) -Q --batch -L . -L test -l test/run-tests.el

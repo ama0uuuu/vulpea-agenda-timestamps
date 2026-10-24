@@ -1,13 +1,13 @@
 ;;; vulpea-agenda-timestamps.el --- Timestamp-based Vulpea agenda filtering -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2026 Your Name
+;; Copyright (C) 2026 Sunao Kaneko
 
-;; Author: Your Name <you@example.com>
-;; Maintainer: Your Name <you@example.com>
+;; Author: Sunao Kaneko <sunao.kaneko@protonmail.com>
+;; Maintainer: Sunao Kaneko <sunao.kaneko@protonmail.com>
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "29.1"))
-;; Keywords: convenience
-;; URL: https://github.com/your-name/vulpea-agenda-timestamps
+;; Package-Requires: ((emacs "30.2"))
+;; Keywords: outlines, calendar
+;; URL: https://github.com/ama0uuuu/vulpea-agenda-timestamps
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;; This file is not part of GNU Emacs.

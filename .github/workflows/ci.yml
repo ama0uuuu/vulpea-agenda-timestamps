@@ -10,12 +10,10 @@ jobs:
     strategy:
       matrix:
         emacs-version:
-          - "29.4"
           - "30.2"
     steps:
       - uses: actions/checkout@v4
       - uses: purcell/setup-emacs@master
         with:
           version: ${{ matrix.emacs-version }}
-      - run: make test
-      - run: make compile
+      - run: make all

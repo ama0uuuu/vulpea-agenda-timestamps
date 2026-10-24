@@ -9,8 +9,7 @@ intended workflow discovers their files through `vulpea-auto-tag` and its
 
 ## Development
 
-The package currently declares Emacs 29.1 as its minimum version. This may be
-adjusted as implementation dependencies become clear.
+The package requires Emacs 30.2 or newer.
 
 Run the test suite in an isolated Emacs process:
 
@@ -18,11 +17,10 @@ Run the test suite in an isolated Emacs process:
 make test
 ```
 
-Run tests, byte compilation, and documentation checks:
+Run tests, strict byte compilation, and documentation checks:
 
 ```sh
 make all
-make checkdoc
 ```
 
 ## Repository layout
