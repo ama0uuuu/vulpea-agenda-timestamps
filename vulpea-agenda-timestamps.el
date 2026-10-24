@@ -5,7 +5,8 @@
 ;; Author: Sunao Kaneko <sunao.kaneko@protonmail.com>
 ;; Maintainer: Sunao Kaneko <sunao.kaneko@protonmail.com>
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "30.2"))
+;; Package-Requires: ((emacs "30.2") (vulpea "2.5.0")
+;;                    (vulpea-agenda "0.1") (vulpea-auto-tag "0.1"))
 ;; Keywords: outlines, calendar
 ;; URL: https://github.com/ama0uuuu/vulpea-agenda-timestamps
 ;; SPDX-License-Identifier: GPL-3.0-or-later
@@ -20,7 +21,20 @@
 ;;; Code:
 
 (require 'org)
+(require 'org-agenda)
 (require 'org-element)
+(require 'seq)
+
+(declare-function vulpea-db-query-by-tags-some "vulpea-db-query" (tags))
+(declare-function vulpea-note-path "vulpea-note" (note))
+
+(defvar vulpea-agenda-tags)
+
+(defvar vulpea-agenda-timestamps--agenda-interval nil
+  "Inclusive agenda interval as a cons of sortable date keys.")
+
+(defvar vulpea-agenda-timestamps--agenda-cache nil
+  "Memoization table dynamically bound during one agenda construction.")
 
 (defgroup vulpea-agenda-timestamps nil
   "Timestamp-based agenda file selection for Vulpea."
@@ -54,16 +68,42 @@ current time."
    (or (org-element-property :day-end timestamp)
        (org-element-property :day-start timestamp))))
 
+(defun vulpea-agenda-timestamps--timestamp-start-key (timestamp)
+  "Return TIMESTAMP's starting calendar-date key."
+  (vulpea-agenda-timestamps--date-key
+   (org-element-property :year-start timestamp)
+   (org-element-property :month-start timestamp)
+   (org-element-property :day-start timestamp)))
+
+(defun vulpea-agenda-timestamps--timestamp-in-range-p
+    (timestamp start-key end-key)
+  "Return non-nil when TIMESTAMP overlaps START-KEY through END-KEY.
+The bounds are inclusive sortable calendar-date keys.  Repeating active
+timestamps are retained conservatively regardless of their base date."
+  (and (memq (org-element-property :type timestamp)
+             '(active active-range))
+       (or (org-element-property :repeater-type timestamp)
+           (and (<= (vulpea-agenda-timestamps--timestamp-start-key timestamp)
+                    end-key)
+                (>= (vulpea-agenda-timestamps--timestamp-end-key timestamp)
+                    start-key)))))
+
 (defun vulpea-agenda-timestamps--timestamp-relevant-p (timestamp today-key)
   "Return non-nil when TIMESTAMP is relevant on or after TODAY-KEY.
 TIMESTAMP must be an Org timestamp object.  TODAY-KEY is the sortable integer
 format returned by `vulpea-agenda-timestamps--today-key'.  Repeating active
 timestamps are retained regardless of their base date."
-  (and (memq (org-element-property :type timestamp)
-             '(active active-range))
-       (or (org-element-property :repeater-type timestamp)
-           (>= (vulpea-agenda-timestamps--timestamp-end-key timestamp)
-               today-key))))
+  (vulpea-agenda-timestamps--timestamp-in-range-p
+   timestamp today-key most-positive-fixnum))
+
+(defun vulpea-agenda-timestamps-buffer-relevant-in-range-p
+    (start-key end-key)
+  "Return non-nil if an active timestamp overlaps START-KEY through END-KEY."
+  (org-element-map (org-element-parse-buffer) 'timestamp
+    (lambda (timestamp)
+      (vulpea-agenda-timestamps--timestamp-in-range-p
+       timestamp start-key end-key))
+    nil t))
 
 (defun vulpea-agenda-timestamps-buffer-relevant-p (&optional now)
   "Return non-nil if the current Org buffer has a relevant timestamp.
@@ -71,11 +111,182 @@ Only ordinary active timestamps are considered.  Org represents `SCHEDULED'
 and `DEADLINE' values as properties of planning elements, so they are not
 visited as ordinary timestamp objects.  NOW defaults to the current time and
 is available primarily for deterministic tests."
-  (let ((today-key (vulpea-agenda-timestamps--today-key now)))
-    (org-element-map (org-element-parse-buffer) 'timestamp
-      (lambda (timestamp)
-        (vulpea-agenda-timestamps--timestamp-relevant-p timestamp today-key))
-      nil t)))
+  (vulpea-agenda-timestamps-buffer-relevant-in-range-p
+   (vulpea-agenda-timestamps--today-key now) most-positive-fixnum))
+
+(defun vulpea-agenda-timestamps--inspect-file (path predicate)
+  "Call PREDICATE in PATH's current or temporary Org buffer."
+  (let ((buffer (find-buffer-visiting path)))
+    (if buffer
+        (with-current-buffer buffer
+          (save-restriction
+            (widen)
+            (funcall predicate)))
+      (with-temp-buffer
+        (insert-file-contents path)
+        (delay-mode-hooks (org-mode))
+        (funcall predicate)))))
+
+(defun vulpea-agenda-timestamps-file-relevant-p (path &optional now)
+  "Return non-nil when the Org file at PATH has a relevant timestamp.
+Use the current contents of an existing visiting buffer.  Otherwise read PATH
+into a temporary Org buffer without running mode hooks.  NOW is forwarded to
+`vulpea-agenda-timestamps-buffer-relevant-p'.  Retain the file conservatively
+and display a warning if it cannot be inspected."
+  (condition-case error-data
+      (vulpea-agenda-timestamps--inspect-file
+       path (lambda () (vulpea-agenda-timestamps-buffer-relevant-p now)))
+    (error
+     (display-warning
+      'vulpea-agenda-timestamps
+      (format "Could not inspect %s; retaining it: %s"
+              path (error-message-string error-data)))
+     t)))
+
+(defun vulpea-agenda-timestamps-file-relevant-in-range-p
+    (path start-key end-key)
+  "Return non-nil when PATH has a timestamp in START-KEY through END-KEY.
+Retain PATH conservatively and display a warning if it cannot be inspected."
+  (condition-case error-data
+      (vulpea-agenda-timestamps--inspect-file
+       path
+       (lambda ()
+         (vulpea-agenda-timestamps-buffer-relevant-in-range-p
+          start-key end-key)))
+    (error
+     (display-warning
+      'vulpea-agenda-timestamps
+      (format "Could not inspect %s; retaining it: %s"
+              path (error-message-string error-data)))
+     t)))
+
+(defun vulpea-agenda-timestamps--memoize (key function)
+  "Return cached value for KEY, or call and cache FUNCTION.
+Only cache when `vulpea-agenda-timestamps--agenda-cache' is dynamically bound
+to a hash table."
+  (if (not (hash-table-p vulpea-agenda-timestamps--agenda-cache))
+      (funcall function)
+    (let ((missing (make-symbol "missing")))
+      (let ((value (gethash key vulpea-agenda-timestamps--agenda-cache missing)))
+        (if (eq value missing)
+            (let ((computed (funcall function)))
+              (puthash key computed vulpea-agenda-timestamps--agenda-cache)
+              computed)
+          value)))))
+
+(defun vulpea-agenda-timestamps--tagged-paths (tags)
+  "Return unique paths of Vulpea notes having any of TAGS."
+  (when tags
+    (vulpea-agenda-timestamps--memoize
+     (list 'tagged-paths tags)
+     (lambda ()
+       (require 'vulpea-db-query)
+       (seq-uniq
+        (mapcar #'vulpea-note-path
+                (vulpea-db-query-by-tags-some tags)))))))
+
+(defun vulpea-agenda-timestamps--other-agenda-tags ()
+  "Return configured Vulpea agenda tags other than the timestamp tag."
+  (seq-remove
+   (lambda (tag) (string= tag vulpea-agenda-timestamps-tag))
+   vulpea-agenda-tags))
+
+(defun vulpea-agenda-timestamps--filter-note-paths (paths)
+  "Filter stale timestamp-only files from Vulpea agenda PATHS.
+Files carrying another tag from `vulpea-agenda-tags' are retained without
+timestamp inspection.  PATHS not carrying the configured timestamp tag are
+also retained."
+  (if (not (member vulpea-agenda-timestamps-tag vulpea-agenda-tags))
+      paths
+    (let ((timestamp-paths
+           (vulpea-agenda-timestamps--tagged-paths
+            (list vulpea-agenda-timestamps-tag)))
+          (other-paths
+           (vulpea-agenda-timestamps--tagged-paths
+            (vulpea-agenda-timestamps--other-agenda-tags))))
+      (seq-filter
+       (lambda (path)
+         (or (not (member path timestamp-paths))
+             (member path other-paths)
+             (vulpea-agenda-timestamps--memoize
+              (list 'file-relevant path
+                    vulpea-agenda-timestamps--agenda-interval)
+              (lambda ()
+                (if vulpea-agenda-timestamps--agenda-interval
+                    (vulpea-agenda-timestamps-file-relevant-in-range-p
+                     path
+                     (car vulpea-agenda-timestamps--agenda-interval)
+                     (cdr vulpea-agenda-timestamps--agenda-interval))
+                  (vulpea-agenda-timestamps-file-relevant-p path))))))
+       paths))))
+
+(defun vulpea-agenda-timestamps--absolute-day-key (absolute-day)
+  "Convert Gregorian ABSOLUTE-DAY to a sortable calendar-date key."
+  (pcase-let ((`(,month ,day ,year)
+               (calendar-gregorian-from-absolute absolute-day)))
+    (vulpea-agenda-timestamps--date-key year month day)))
+
+(defun vulpea-agenda-timestamps--agenda-list-interval
+    (arg start-day span)
+  "Return the inclusive interval requested by agenda list arguments.
+ARG, START-DAY, and SPAN follow `org-agenda-list'."
+  (when org-agenda-overriding-arguments
+    (setq arg (car org-agenda-overriding-arguments)
+          start-day (nth 1 org-agenda-overriding-arguments)
+          span (nth 2 org-agenda-overriding-arguments)))
+  (when (and (integerp arg) (> arg 0))
+    (setq span arg))
+  (setq start-day (or start-day org-agenda-start-day))
+  (when (stringp start-day)
+    (setq start-day (time-to-days (org-read-date nil t start-day))))
+  (let* ((span (org-agenda-ndays-to-span (or span org-agenda-span)))
+         (start-day (or start-day (org-today)))
+         (days (org-agenda-span-to-ndays span start-day))
+         (weekday (and (memq days '(7 14)) org-agenda-start-on-weekday))
+         (start (if (not weekday)
+                    start-day
+                  (let* ((actual (calendar-day-of-week
+                                  (calendar-gregorian-from-absolute start-day)))
+                         (difference (- actual weekday)))
+                    (- start-day
+                       (+ (if (< difference 0) 7 0) difference))))))
+    (cons (vulpea-agenda-timestamps--absolute-day-key start)
+          (vulpea-agenda-timestamps--absolute-day-key
+           (+ start days -1)))))
+
+(defun vulpea-agenda-timestamps--agenda-list-advice
+    (original-function &optional arg start-day span with-hour)
+  "Call ORIGINAL-FUNCTION with a run-local interval and cache.
+ARG, START-DAY, SPAN, and WITH-HOUR are the arguments of `org-agenda-list'."
+  (let ((vulpea-agenda-timestamps--agenda-interval
+         (vulpea-agenda-timestamps--agenda-list-interval
+          arg start-day span))
+        (vulpea-agenda-timestamps--agenda-cache
+         (make-hash-table :test #'equal)))
+    (funcall original-function arg start-day span with-hour)))
+
+(defun vulpea-agenda-timestamps--filter-note-paths-advice
+    (original-function &rest args)
+  "Filter paths returned by ORIGINAL-FUNCTION called with ARGS."
+  (vulpea-agenda-timestamps--filter-note-paths
+   (apply original-function args)))
+
+;;;###autoload
+(define-minor-mode vulpea-agenda-timestamps-mode
+  "Filter stale timestamp-only notes from `vulpea-agenda' results."
+  :global t
+  :group 'vulpea-agenda-timestamps
+  (if vulpea-agenda-timestamps-mode
+      (progn
+        (require 'vulpea-agenda)
+        (advice-add 'vulpea-agenda--get-note-paths :around
+                    #'vulpea-agenda-timestamps--filter-note-paths-advice)
+        (advice-add 'org-agenda-list :around
+                    #'vulpea-agenda-timestamps--agenda-list-advice))
+    (advice-remove 'vulpea-agenda--get-note-paths
+                   #'vulpea-agenda-timestamps--filter-note-paths-advice)
+    (advice-remove 'org-agenda-list
+                   #'vulpea-agenda-timestamps--agenda-list-advice)))
 
 ;;;###autoload
 (defun vulpea-agenda-timestamps-auto-tag-rule ()

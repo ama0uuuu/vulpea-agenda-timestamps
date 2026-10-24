@@ -30,6 +30,21 @@ Configure `vulpea-agenda` to query both automatic tags:
 Customize `vulpea-agenda-timestamps-tag` if a different timestamp tag is
 preferred, and use the same value in `vulpea-agenda-tags`.
 
+Finally, enable both agenda modes:
+
+```elisp
+(vulpea-agenda-mode 1)
+(vulpea-agenda-timestamps-mode 1)
+```
+
+`vulpea-agenda-timestamps-mode` filters only paths contributed by
+`vulpea-agenda`.  Files listed directly in `org-agenda-files` remain untouched.
+A stale timestamp-tagged file is also retained when it carries another tag in
+`vulpea-agenda-tags`, such as `todo`.  Daily, weekly, monthly, future, and
+custom agenda spans are filtered against their requested date interval.
+Database queries and file inspections are reused when Org asks for the agenda
+files more than once during the same agenda construction.
+
 ## Development
 
 The package requires Emacs 30.2 or newer.
