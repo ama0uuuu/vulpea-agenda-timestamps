@@ -10,3 +10,5 @@ the project intends to follow [Semantic Versioning](https://semver.org/).
 ### Added
 
 - Initial package structure and ERT test runner.
+- Detection of relevant ordinary active timestamps, including ranges and
+  repeaters, while excluding inactive and planning timestamps.
