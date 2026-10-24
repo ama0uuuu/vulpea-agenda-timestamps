@@ -1,0 +1,6 @@
+*.elc
+*-autoloads.el
+/.dir-locals-2.el
+/.elpa/
+/.cache/
+/.DS_Store
