@@ -45,6 +45,27 @@ custom agenda spans are filtered against their requested date interval.
 Database queries and file inspections are reused when Org asks for the agenda
 files more than once during the same agenda construction.
 
+## Maintenance
+
+After configuring the automatic tag rule, initialize existing notes once with:
+
+```text
+M-x vulpea-agenda-timestamps-reindex
+```
+
+The command adds or removes the candidate tag across all files currently
+indexed by Vulpea.  To remove only tags that have become stale over time, run:
+
+```text
+M-x vulpea-agenda-timestamps-cleanup-stale-tags
+```
+
+Both commands are safe to rerun, save only files whose candidate tag changes,
+and report processed, changed, skipped, and failed counts.  A file requiring an
+edit is skipped when its buffer already contains unsaved changes.  Buffers that
+were open beforehand remain open; clean buffers opened by a command are closed
+after processing.
+
 ## Development
 
 The package requires Emacs 30.2 or newer.

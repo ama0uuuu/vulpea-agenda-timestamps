@@ -227,11 +227,13 @@ The command should be safe to rerun.
 
 ### Phase 4: migration and maintenance
 
-- Add the one-time reindex command.
-- Add an explicit stale-tag cleanup command.
-- Consider opt-in cleanup during agenda preparation.
+- Add the one-time reindex command. (Implemented.)
+- Add an explicit stale-tag cleanup command. (Implemented.)
+- Consider opt-in cleanup during agenda preparation. (Deferred: agenda
+  construction remains read-only.)
 - Consider a timer or `midnight-hook` only as a performance enhancement, not
-  as the sole correctness mechanism.
+  as the sole correctness mechanism. (Deferred until Phase 5 profiling shows
+  that automatic cleanup would materially help.)
 
 ### Phase 5: profiling and refinement
 

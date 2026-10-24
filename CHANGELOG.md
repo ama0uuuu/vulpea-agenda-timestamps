@@ -18,3 +18,6 @@ the project intends to follow [Semantic Versioning](https://semver.org/).
   by `vulpea-agenda`, while preserving ordinary agenda files and files selected
   through other configured tags.  Filtering follows the requested agenda date
   interval and caches database queries and file inspections for one agenda run.
+- Idempotent reindex and stale-tag cleanup commands with unsaved-buffer
+  protection, normal save-hook/database updates, per-file error isolation, and
+  completion counts.
