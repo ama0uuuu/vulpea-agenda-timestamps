@@ -44,6 +44,14 @@
 (defvar vulpea-agenda-timestamps--maintenance-running nil
   "Non-nil while a reindex or cleanup command is processing files.")
 
+(defvar vulpea-agenda-timestamps--profile-data nil
+  "Profiling data dynamically bound during one agenda construction.")
+
+(defvar vulpea-agenda-timestamps-last-profile nil
+  "Metrics from the most recent profiled agenda construction.")
+
+(defvar vulpea-agenda-timestamps-profiling-mode nil)
+
 (defgroup vulpea-agenda-timestamps nil
   "Timestamp-based agenda file selection for Vulpea."
   :group 'org
@@ -53,6 +61,21 @@
   "Vulpea tag for notes containing relevant ordinary active timestamps."
   :type 'string
   :group 'vulpea-agenda-timestamps)
+
+(defun vulpea-agenda-timestamps--profile-add (property amount)
+  "Add AMOUNT to profiling PROPERTY when profiling is active."
+  (when vulpea-agenda-timestamps--profile-data
+    (setf (plist-get vulpea-agenda-timestamps--profile-data property)
+          (+ (or (plist-get vulpea-agenda-timestamps--profile-data property) 0)
+             amount))))
+
+(defun vulpea-agenda-timestamps--profile-time (property function)
+  "Call FUNCTION and add its elapsed seconds to profiling PROPERTY."
+  (let ((started (current-time)))
+    (unwind-protect
+        (funcall function)
+      (vulpea-agenda-timestamps--profile-add
+       property (float-time (time-subtract (current-time) started))))))
 
 (defun vulpea-agenda-timestamps--date-key (year month day)
   "Return a sortable integer date key for YEAR, MONTH, and DAY."
@@ -188,10 +211,14 @@ to a hash table."
     (vulpea-agenda-timestamps--memoize
      (list 'tagged-paths tags)
      (lambda ()
-       (require 'vulpea-db-query)
-       (seq-uniq
-        (mapcar #'vulpea-note-path
-                (vulpea-db-query-by-tags-some tags)))))))
+       (vulpea-agenda-timestamps--profile-add :query-count 1)
+       (vulpea-agenda-timestamps--profile-time
+        :query-seconds
+        (lambda ()
+          (require 'vulpea-db-query)
+          (seq-uniq
+           (mapcar #'vulpea-note-path
+                   (vulpea-db-query-by-tags-some tags)))))))))
 
 (defun vulpea-agenda-timestamps--other-agenda-tags ()
   "Return configured Vulpea agenda tags other than the timestamp tag."
@@ -204,29 +231,64 @@ to a hash table."
 Files carrying another tag from `vulpea-agenda-tags' are retained without
 timestamp inspection.  PATHS not carrying the configured timestamp tag are
 also retained."
-  (if (not (member vulpea-agenda-timestamps-tag vulpea-agenda-tags))
-      paths
-    (let ((timestamp-paths
-           (vulpea-agenda-timestamps--tagged-paths
-            (list vulpea-agenda-timestamps-tag)))
-          (other-paths
-           (vulpea-agenda-timestamps--tagged-paths
-            (vulpea-agenda-timestamps--other-agenda-tags))))
-      (seq-filter
-       (lambda (path)
-         (or (not (member path timestamp-paths))
-             (member path other-paths)
-             (vulpea-agenda-timestamps--memoize
-              (list 'file-relevant path
-                    vulpea-agenda-timestamps--agenda-interval)
-              (lambda ()
-                (if vulpea-agenda-timestamps--agenda-interval
-                    (vulpea-agenda-timestamps-file-relevant-in-range-p
-                     path
-                     (car vulpea-agenda-timestamps--agenda-interval)
-                     (cdr vulpea-agenda-timestamps--agenda-interval))
-                  (vulpea-agenda-timestamps-file-relevant-p path))))))
-       paths))))
+  (vulpea-agenda-timestamps--profile-time
+   :filter-seconds
+   (lambda ()
+     (vulpea-agenda-timestamps--profile-add :filter-calls 1)
+     (vulpea-agenda-timestamps--profile-add :input-paths (length paths))
+     (if (not (member vulpea-agenda-timestamps-tag vulpea-agenda-tags))
+         (progn
+           (vulpea-agenda-timestamps--profile-add :output-paths (length paths))
+           paths)
+       (let ((timestamp-paths
+              (vulpea-agenda-timestamps--tagged-paths
+               (list vulpea-agenda-timestamps-tag)))
+             (other-paths
+              (vulpea-agenda-timestamps--tagged-paths
+               (vulpea-agenda-timestamps--other-agenda-tags))))
+         (let ((filtered
+                (seq-filter
+                 (lambda (path)
+                   (if (not (member path timestamp-paths))
+                       t
+                     (vulpea-agenda-timestamps--profile-add
+                      :timestamp-candidates 1)
+                     (if (member path other-paths)
+                         (progn
+                           (vulpea-agenda-timestamps--profile-add
+                            :protected-paths 1)
+                           t)
+                       (vulpea-agenda-timestamps--profile-add
+                        :inspected-paths 1)
+                       (let ((relevant
+                              (vulpea-agenda-timestamps--memoize
+                               (list 'file-relevant path
+                                     vulpea-agenda-timestamps--agenda-interval)
+                               (lambda ()
+                                 (vulpea-agenda-timestamps--profile-add
+                                  :parsed-files 1)
+                                 (vulpea-agenda-timestamps--profile-time
+                                  :parse-seconds
+                                  (lambda ()
+                                    (if vulpea-agenda-timestamps--agenda-interval
+                                        (vulpea-agenda-timestamps-file-relevant-in-range-p
+                                         path
+                                         (car vulpea-agenda-timestamps--agenda-interval)
+                                         (cdr vulpea-agenda-timestamps--agenda-interval))
+                                      (vulpea-agenda-timestamps-file-relevant-p
+                                       path))))))))
+                         (if relevant
+                             (progn
+                               (vulpea-agenda-timestamps--profile-add
+                                :relevant-paths 1)
+                               t)
+                           (vulpea-agenda-timestamps--profile-add
+                            :eliminated-paths 1)
+                           nil)))))
+                 paths)))
+           (vulpea-agenda-timestamps--profile-add
+            :output-paths (length filtered))
+           filtered))))))
 
 (defun vulpea-agenda-timestamps--absolute-day-key (absolute-day)
   "Convert Gregorian ABSOLUTE-DAY to a sortable calendar-date key."
@@ -266,12 +328,23 @@ ARG, START-DAY, and SPAN follow `org-agenda-list'."
     (original-function &optional arg start-day span with-hour)
   "Call ORIGINAL-FUNCTION with a run-local interval and cache.
 ARG, START-DAY, SPAN, and WITH-HOUR are the arguments of `org-agenda-list'."
-  (let ((vulpea-agenda-timestamps--agenda-interval
-         (vulpea-agenda-timestamps--agenda-list-interval
-          arg start-day span))
+  (let* ((interval (vulpea-agenda-timestamps--agenda-list-interval
+                    arg start-day span))
+         (vulpea-agenda-timestamps--agenda-interval interval)
         (vulpea-agenda-timestamps--agenda-cache
-         (make-hash-table :test #'equal)))
-    (funcall original-function arg start-day span with-hour)))
+         (make-hash-table :test #'equal))
+         (vulpea-agenda-timestamps--profile-data
+          (and vulpea-agenda-timestamps-profiling-mode
+               (list :interval interval)))
+         (started (and vulpea-agenda-timestamps--profile-data
+                       (current-time))))
+    (unwind-protect
+        (funcall original-function arg start-day span with-hour)
+      (when vulpea-agenda-timestamps--profile-data
+        (vulpea-agenda-timestamps--profile-add
+         :total-seconds (float-time (time-subtract (current-time) started)))
+        (setq vulpea-agenda-timestamps-last-profile
+              (copy-tree vulpea-agenda-timestamps--profile-data))))))
 
 (defun vulpea-agenda-timestamps--filter-note-paths-advice
     (original-function &rest args)
@@ -295,6 +368,81 @@ ARG, START-DAY, SPAN, and WITH-HOUR are the arguments of `org-agenda-list'."
                    #'vulpea-agenda-timestamps--filter-note-paths-advice)
     (advice-remove 'org-agenda-list
                    #'vulpea-agenda-timestamps--agenda-list-advice)))
+
+;;;###autoload
+(define-minor-mode vulpea-agenda-timestamps-profiling-mode
+  "Record timing and path-count metrics for timestamp-filtered agendas.
+After constructing an agenda, use
+`vulpea-agenda-timestamps-profile-report' to inspect the latest metrics."
+  :global t
+  :group 'vulpea-agenda-timestamps
+  (when vulpea-agenda-timestamps-profiling-mode
+    (setq vulpea-agenda-timestamps-last-profile nil)))
+
+(defun vulpea-agenda-timestamps--profile-number (profile property)
+  "Return numeric PROPERTY from PROFILE, defaulting to zero."
+  (or (plist-get profile property) 0))
+
+(defun vulpea-agenda-timestamps--format-profile (profile)
+  "Format PROFILE as a human-readable performance report."
+  (let* ((interval (plist-get profile :interval))
+         (candidates (vulpea-agenda-timestamps--profile-number
+                      profile :timestamp-candidates))
+         (eliminated (vulpea-agenda-timestamps--profile-number
+                      profile :eliminated-paths))
+         (eliminated-percent
+          (if (zerop candidates)
+              0.0
+            (* 100.0 (/ (float eliminated) candidates)))))
+    (format
+     (concat "Vulpea agenda timestamp profile\n\n"
+             "Interval: %s through %s\n"
+             "Total agenda: %.3f s\n"
+             "Candidate queries: %.3f s (%d uncached queries)\n"
+             "Timestamp filtering: %.3f s (%d calls)\n"
+             "File parsing: %.3f s (%d unique files)\n\n"
+             "Input path evaluations: %d\n"
+             "Timestamp candidates: %d\n"
+             "Protected by other tags: %d\n"
+             "Inspected candidates: %d\n"
+             "Relevant candidates: %d\n"
+             "Eliminated candidates: %d (%.1f%%)\n"
+             "Output path evaluations: %d\n\n"
+             "Cleanup signal: %s\n")
+     (or (car interval) "unknown") (or (cdr interval) "unknown")
+     (vulpea-agenda-timestamps--profile-number profile :total-seconds)
+     (vulpea-agenda-timestamps--profile-number profile :query-seconds)
+     (vulpea-agenda-timestamps--profile-number profile :query-count)
+     (vulpea-agenda-timestamps--profile-number profile :filter-seconds)
+     (vulpea-agenda-timestamps--profile-number profile :filter-calls)
+     (vulpea-agenda-timestamps--profile-number profile :parse-seconds)
+     (vulpea-agenda-timestamps--profile-number profile :parsed-files)
+     (vulpea-agenda-timestamps--profile-number profile :input-paths)
+     candidates
+     (vulpea-agenda-timestamps--profile-number profile :protected-paths)
+     (vulpea-agenda-timestamps--profile-number profile :inspected-paths)
+     (vulpea-agenda-timestamps--profile-number profile :relevant-paths)
+     eliminated eliminated-percent
+     (vulpea-agenda-timestamps--profile-number profile :output-paths)
+     (cond
+      ((zerop eliminated) "no stale candidates were observed")
+      ((< (vulpea-agenda-timestamps--profile-number profile :parse-seconds)
+          (* 0.05 (vulpea-agenda-timestamps--profile-number
+                   profile :total-seconds)))
+       "stale parsing was under 5% of total time; automatic cleanup is unlikely to help materially")
+      (t "compare another profile after explicit cleanup before enabling automation")))))
+
+;;;###autoload
+(defun vulpea-agenda-timestamps-profile-report ()
+  "Display metrics from the most recent profiled agenda construction."
+  (interactive)
+  (unless vulpea-agenda-timestamps-last-profile
+    (user-error "No profile available; enable profiling and build an agenda"))
+  (let ((report (vulpea-agenda-timestamps--format-profile
+                 vulpea-agenda-timestamps-last-profile)))
+    (with-help-window "*Vulpea Agenda Timestamp Profile*"
+      (princ report))
+    report))
 
 (defun vulpea-agenda-timestamps--all-note-paths ()
   "Return unique paths for all notes currently indexed by Vulpea."

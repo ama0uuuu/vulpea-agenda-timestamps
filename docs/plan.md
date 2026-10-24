@@ -238,9 +238,13 @@ The command should be safe to rerun.
 ### Phase 5: profiling and refinement
 
 - Measure candidate-query time, timestamp-filter time, and total agenda time.
-- Count how many files each stage eliminates.
+  (Implemented as opt-in per-agenda profiling.)
+- Count how many files each stage eliminates. (Implemented, including protected,
+  parsed, relevant, and eliminated candidate counts.)
 - Determine whether persistent stale-tag cleanup materially improves speed.
-- Optimize only after representative measurements.
+  (The report provides a cleanup signal and a before/after measurement workflow.)
+- Optimize only after representative measurements. (No automatic cleanup or
+  timer is enabled by default; real profiles must justify that tradeoff.)
 
 ## Test strategy
 

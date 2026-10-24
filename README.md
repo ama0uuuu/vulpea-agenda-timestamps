@@ -66,6 +66,27 @@ edit is skipped when its buffer already contains unsaved changes.  Buffers that
 were open beforehand remain open; clean buffers opened by a command are closed
 after processing.
 
+## Profiling
+
+Enable profiling, build a representative date agenda, and display its metrics:
+
+```text
+M-x vulpea-agenda-timestamps-profiling-mode
+M-x org-agenda
+M-x vulpea-agenda-timestamps-profile-report
+```
+
+The report separates total agenda, candidate-query, timestamp-filter, and file
+parsing times.  It also reports input paths, timestamp candidates, candidates
+protected by other tags, unique files parsed, and candidates eliminated.
+
+To evaluate persistent stale-tag cleanup, save the first report, run
+`vulpea-agenda-timestamps-cleanup-stale-tags`, and profile the same agenda
+again.  The report treats parsing below 5% of total agenda time as unlikely to
+benefit materially from automatic cleanup.  Agenda construction remains
+read-only; no timer or automatic cleanup is enabled without representative
+measurements showing a worthwhile improvement.
+
 ## Development
 
 The package requires Emacs 30.2 or newer.

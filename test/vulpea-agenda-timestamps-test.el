@@ -304,6 +304,79 @@
              (hash-table-p vulpea-agenda-timestamps--agenda-cache)))
       nil "2026-10-25" 7 nil))))
 
+(ert-deftest vulpea-agenda-timestamps-test-profile-counts-filter-stages ()
+  "Profiling counts candidates retained and eliminated by each stage."
+  (let ((vulpea-agenda-tags '("todo" "timestamp"))
+        (vulpea-agenda-timestamps--agenda-interval
+         '(20261025 . 20261031))
+        (vulpea-agenda-timestamps--agenda-cache
+         (make-hash-table :test #'equal))
+        (vulpea-agenda-timestamps--profile-data
+         (list :interval '(20261025 . 20261031))))
+    (cl-letf (((symbol-function 'vulpea-agenda-timestamps--tagged-paths)
+               (lambda (tags)
+                 (if (equal tags '("timestamp"))
+                     '("protected.org" "keep.org" "drop.org")
+                   '("protected.org"))))
+              ((symbol-function
+                'vulpea-agenda-timestamps-file-relevant-in-range-p)
+               (lambda (path &rest _args) (equal path "keep.org"))))
+      (should
+       (equal
+        (vulpea-agenda-timestamps--filter-note-paths
+         '("ordinary.org" "protected.org" "keep.org" "drop.org"))
+        '("ordinary.org" "protected.org" "keep.org")))
+      (should (= (plist-get vulpea-agenda-timestamps--profile-data
+                            :timestamp-candidates)
+                 3))
+      (should (= (plist-get vulpea-agenda-timestamps--profile-data
+                            :protected-paths)
+                 1))
+      (should (= (plist-get vulpea-agenda-timestamps--profile-data
+                            :parsed-files)
+                 2))
+      (should (= (plist-get vulpea-agenda-timestamps--profile-data
+                            :relevant-paths)
+                 1))
+      (should (= (plist-get vulpea-agenda-timestamps--profile-data
+                            :eliminated-paths)
+                 1)))))
+
+(ert-deftest vulpea-agenda-timestamps-test-profile-records-completed-agenda ()
+  "Agenda advice publishes timing data after a profiled run."
+  (let ((vulpea-agenda-timestamps-profiling-mode t)
+        (vulpea-agenda-timestamps-last-profile nil)
+        (org-agenda-overriding-arguments nil)
+        (org-agenda-start-day nil)
+        (org-agenda-start-on-weekday nil))
+    (should
+     (eq (vulpea-agenda-timestamps--agenda-list-advice
+          (lambda (&rest _args)
+            (vulpea-agenda-timestamps--profile-add :input-paths 2)
+            'agenda-result)
+          nil "2026-10-25" 7 nil)
+         'agenda-result))
+    (should (equal (plist-get vulpea-agenda-timestamps-last-profile :interval)
+                   '(20261025 . 20261031)))
+    (should (= (plist-get vulpea-agenda-timestamps-last-profile :input-paths)
+               2))
+    (should (numberp
+             (plist-get vulpea-agenda-timestamps-last-profile
+                        :total-seconds)))))
+
+(ert-deftest vulpea-agenda-timestamps-test-profile-report-format ()
+  "Profile reports expose timings, counts, and a cleanup signal."
+  (let ((report
+         (vulpea-agenda-timestamps--format-profile
+          '(:interval (20261025 . 20261031)
+            :total-seconds 1.0 :query-seconds 0.1 :query-count 2
+            :filter-seconds 0.2 :filter-calls 1 :parse-seconds 0.1
+            :parsed-files 4 :input-paths 10 :timestamp-candidates 5
+            :protected-paths 1 :inspected-paths 4 :relevant-paths 2
+            :eliminated-paths 2 :output-paths 8))))
+    (should (string-match-p "Eliminated candidates: 2 (40.0%)" report))
+    (should (string-match-p "compare another profile" report))))
+
 (ert-deftest vulpea-agenda-timestamps-test-set-buffer-tag-adds ()
   "Tag synchronization preserves existing tags while adding the candidate."
   (let ((tags '("todo")))

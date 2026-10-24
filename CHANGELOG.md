@@ -21,3 +21,6 @@ the project intends to follow [Semantic Versioning](https://semver.org/).
 - Idempotent reindex and stale-tag cleanup commands with unsaved-buffer
   protection, normal save-hook/database updates, per-file error isolation, and
   completion counts.
+- Opt-in per-agenda profiling for database queries, filtering, unique file
+  parsing, total runtime, cache behavior, and path elimination counts, with a
+  report that guides before/after stale-cleanup measurements.
