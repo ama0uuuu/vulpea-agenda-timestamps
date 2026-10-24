@@ -6,10 +6,7 @@
 
 (require 'ert)
 (require 'cl-lib)
-(require 'org-agenda)
 (require 'vulpea-agenda-timestamps)
-
-(defvar vulpea-agenda-tags)
 
 (defconst vulpea-agenda-timestamps-test--today
   (encode-time 0 0 12 25 10 2026)
@@ -24,7 +21,7 @@
      vulpea-agenda-timestamps-test--today)))
 
 (ert-deftest vulpea-agenda-timestamps-test-default-tag ()
-  "The default candidate tag is `timestamp'."
+  "The default managed tag is `timestamp'."
   (should (equal vulpea-agenda-timestamps-tag "timestamp")))
 
 (ert-deftest vulpea-agenda-timestamps-test-active-timestamp-today ()
@@ -108,282 +105,6 @@
       (should (equal (vulpea-agenda-timestamps-auto-tag-rule)
                      '(("calendar") . nil))))))
 
-(ert-deftest vulpea-agenda-timestamps-test-file-relevant-p ()
-  "File relevance is evaluated from a temporary Org buffer."
-  (let ((file (make-temp-file "vulpea-agenda-timestamps-" nil ".org")))
-    (unwind-protect
-        (progn
-          (with-temp-file file
-            (insert "* Event\n  <2026-10-26 Mon>\n"))
-          (should (vulpea-agenda-timestamps-file-relevant-p
-                   file vulpea-agenda-timestamps-test--today)))
-      (delete-file file))))
-
-(ert-deftest vulpea-agenda-timestamps-test-file-relevant-p-visiting-buffer ()
-  "File relevance observes unsaved changes in an existing buffer."
-  (let ((file (make-temp-file "vulpea-agenda-timestamps-" nil ".org"))
-        buffer)
-    (unwind-protect
-        (progn
-          (with-temp-file file
-            (insert "* Old\n  <2026-10-20 Tue>\n"))
-          (setq buffer (find-file-noselect file))
-          (with-current-buffer buffer
-            (goto-char (point-max))
-            (insert "* Future\n  <2026-10-26 Mon>\n"))
-          (should (vulpea-agenda-timestamps-file-relevant-p
-                   file vulpea-agenda-timestamps-test--today)))
-      (when (buffer-live-p buffer)
-        (with-current-buffer buffer
-          (set-buffer-modified-p nil))
-        (kill-buffer buffer))
-      (delete-file file))))
-
-(ert-deftest vulpea-agenda-timestamps-test-file-error-is-conservative ()
-  "An unreadable candidate remains eligible instead of disappearing."
-  (cl-letf (((symbol-function 'display-warning) #'ignore))
-    (should (vulpea-agenda-timestamps-file-relevant-p
-             "/definitely/missing/vulpea-note.org"
-             vulpea-agenda-timestamps-test--today))))
-
-(ert-deftest vulpea-agenda-timestamps-test-filter-removes-stale-candidate ()
-  "A stale file carrying only the timestamp tag is removed."
-  (let ((vulpea-agenda-tags '("todo" "timestamp")))
-    (cl-letf (((symbol-function 'vulpea-agenda-timestamps--tagged-paths)
-               (lambda (tags)
-                 (if (equal tags '("timestamp")) '("stale.org") nil)))
-              ((symbol-function
-                'vulpea-agenda-timestamps-file-relevant-p)
-               (lambda (_path &optional _now) nil)))
-      (should (equal
-               (vulpea-agenda-timestamps--filter-note-paths
-                '("ordinary.org" "stale.org"))
-               '("ordinary.org"))))))
-
-(ert-deftest vulpea-agenda-timestamps-test-filter-keeps-relevant-candidate ()
-  "A timestamp-tagged file with a relevant timestamp is retained."
-  (let ((vulpea-agenda-tags '("todo" "timestamp")))
-    (cl-letf (((symbol-function 'vulpea-agenda-timestamps--tagged-paths)
-               (lambda (tags)
-                 (if (equal tags '("timestamp")) '("event.org") nil)))
-              ((symbol-function
-                'vulpea-agenda-timestamps-file-relevant-p)
-               (lambda (_path &optional _now) t)))
-      (should (equal
-               (vulpea-agenda-timestamps--filter-note-paths '("event.org"))
-               '("event.org"))))))
-
-(ert-deftest vulpea-agenda-timestamps-test-filter-keeps-other-tag ()
-  "Another configured agenda tag protects a stale timestamp file."
-  (let ((vulpea-agenda-tags '("todo" "timestamp")))
-    (cl-letf (((symbol-function 'vulpea-agenda-timestamps--tagged-paths)
-               (lambda (tags)
-                 (cond ((equal tags '("timestamp")) '("task.org"))
-                       ((equal tags '("todo")) '("task.org")))))
-              ((symbol-function
-                'vulpea-agenda-timestamps-file-relevant-p)
-               (lambda (&rest _args)
-                 (ert-fail "A protected path must not be inspected"))))
-      (should (equal
-               (vulpea-agenda-timestamps--filter-note-paths '("task.org"))
-               '("task.org"))))))
-
-(ert-deftest vulpea-agenda-timestamps-test-filter-disabled-by-tags ()
-  "Filtering is a no-op when the timestamp tag is not configured."
-  (let ((vulpea-agenda-tags '("todo")))
-    (cl-letf (((symbol-function 'vulpea-agenda-timestamps--tagged-paths)
-               (lambda (&rest _args)
-                 (ert-fail "The database must not be queried"))))
-      (should (equal
-               (vulpea-agenda-timestamps--filter-note-paths '("task.org"))
-               '("task.org"))))))
-
-(ert-deftest vulpea-agenda-timestamps-test-filter-advice ()
-  "The advice filters paths produced by the wrapped function."
-  (cl-letf (((symbol-function
-              'vulpea-agenda-timestamps--filter-note-paths)
-             (lambda (paths) (cdr paths))))
-    (should
-     (equal
-      (vulpea-agenda-timestamps--filter-note-paths-advice
-       (lambda (&rest _args) '("drop.org" "keep.org")) 'ignored)
-      '("keep.org")))))
-
-(ert-deftest vulpea-agenda-timestamps-test-filter-advice-collapses-nesting ()
-  "Nested copies of the advice perform one outer filtering pass."
-  (let ((filter-count 0)
-        (vulpea-agenda-tags '("timestamp"))
-        (vulpea-agenda-timestamps--profile-data (list :future-from 20261025)))
-    (cl-letf (((symbol-function
-                'vulpea-agenda-timestamps--filter-note-paths-uncached)
-               (lambda (paths)
-                 (setq filter-count (1+ filter-count))
-                 (cdr paths))))
-      (should
-       (equal
-        (vulpea-agenda-timestamps--filter-note-paths-advice
-         (lambda ()
-           (vulpea-agenda-timestamps--filter-note-paths-advice
-            (lambda () '("drop.org" "keep.org")))))
-        '("keep.org")))
-      (should (= filter-count 1)))))
-
-(ert-deftest vulpea-agenda-timestamps-test-filter-collapses-reentry ()
-  "A recursive agenda-files lookup cannot start another filtering pass."
-  (let ((filter-count 0)
-        (vulpea-agenda-tags '("timestamp"))
-        (vulpea-agenda-timestamps--profile-data (list :future-from 20261025)))
-    (cl-letf (((symbol-function
-                'vulpea-agenda-timestamps--filter-note-paths-uncached)
-               (lambda (paths)
-                 (setq filter-count (1+ filter-count))
-                 (should (equal
-                          (vulpea-agenda-timestamps--filter-note-paths paths)
-                          paths))
-                 paths)))
-      (should (equal
-               (vulpea-agenda-timestamps--filter-note-paths '("event.org"))
-               '("event.org")))
-      (should (= filter-count 1))
-      (should (= (plist-get vulpea-agenda-timestamps--profile-data
-                            :suppressed-filter-calls)
-                 1)))))
-
-(ert-deftest vulpea-agenda-timestamps-test-filter-uses-future-relevance ()
-  "Filtering retains a file with timestamps beyond the displayed span."
-  (let ((vulpea-agenda-tags '("timestamp")))
-    (cl-letf (((symbol-function 'vulpea-agenda-timestamps--tagged-paths)
-               (lambda (_tags) '("event.org")))
-              ((symbol-function 'vulpea-agenda-timestamps-file-relevant-p)
-               (lambda (path &optional _now)
-                 (should (equal path "event.org"))
-                 t)))
-      (should (equal
-               (vulpea-agenda-timestamps--filter-note-paths '("event.org"))
-               '("event.org"))))))
-
-(ert-deftest vulpea-agenda-timestamps-test-agenda-run-cache ()
-  "Repeated filtering in one agenda run reuses queries and parsing."
-  (let ((vulpea-agenda-tags '("timestamp"))
-        (vulpea-agenda-timestamps--agenda-cache
-         (make-hash-table :test #'equal))
-        (query-count 0)
-        (inspection-count 0))
-    (cl-letf (((symbol-function 'vulpea-db-query-by-tags-some)
-               (lambda (_tags)
-                 (cl-incf query-count)
-                 '(note)))
-              ((symbol-function 'require)
-               (lambda (&rest _args) t))
-              ((symbol-function 'vulpea-note-path)
-               (lambda (_note) "event.org"))
-              ((symbol-function 'vulpea-agenda-timestamps-file-relevant-p)
-               (lambda (&rest _args)
-                 (cl-incf inspection-count)
-                 t)))
-      (dotimes (_ 2)
-        (should (equal
-                 (vulpea-agenda-timestamps--filter-note-paths '("event.org"))
-                 '("event.org"))))
-      (should (= query-count 1))
-      (should (= inspection-count 1)))))
-
-(ert-deftest vulpea-agenda-timestamps-test-agenda-run-advice-binds-state ()
-  "Agenda advice binds its cache for the wrapped call."
-  (should
-   (vulpea-agenda-timestamps--agenda-run-advice
-    (lambda (&rest _args)
-      (hash-table-p vulpea-agenda-timestamps--agenda-cache))
-    nil "2026-10-25" 7 nil)))
-
-(ert-deftest vulpea-agenda-timestamps-test-nested-agenda-reuses-state ()
-  "Custom agenda blocks reuse the outer run's cache and profile."
-  (let ((vulpea-agenda-timestamps-profiling-mode t)
-        outer-cache inner-cache)
-    (vulpea-agenda-timestamps--agenda-run-advice
-     (lambda ()
-       (setq outer-cache vulpea-agenda-timestamps--agenda-cache)
-       (vulpea-agenda-timestamps--agenda-run-advice
-        (lambda ()
-          (setq inner-cache vulpea-agenda-timestamps--agenda-cache)
-          (vulpea-agenda-timestamps--profile-add :filter-calls 1)))))
-    (should (eq outer-cache inner-cache))
-    (should (= (plist-get vulpea-agenda-timestamps-last-profile :filter-calls)
-               1))))
-
-(ert-deftest vulpea-agenda-timestamps-test-profile-counts-filter-stages ()
-  "Profiling counts candidates retained and eliminated by each stage."
-  (let ((vulpea-agenda-tags '("todo" "timestamp"))
-        (vulpea-agenda-timestamps--agenda-cache
-         (make-hash-table :test #'equal))
-        (vulpea-agenda-timestamps--profile-data (list :future-from 20261025)))
-    (cl-letf (((symbol-function 'vulpea-agenda-timestamps--tagged-paths)
-               (lambda (tags)
-                 (if (equal tags '("timestamp"))
-                     '("protected.org" "keep.org" "drop.org")
-                   '("protected.org"))))
-              ((symbol-function 'vulpea-agenda-timestamps-file-relevant-p)
-               (lambda (path &rest _args) (equal path "keep.org"))))
-      (should
-       (equal
-        (vulpea-agenda-timestamps--filter-note-paths
-         '("ordinary.org" "protected.org" "keep.org" "drop.org"))
-        '("ordinary.org" "protected.org" "keep.org")))
-      (should (= (plist-get vulpea-agenda-timestamps--profile-data
-                            :timestamp-candidates)
-                 3))
-      (should (= (plist-get vulpea-agenda-timestamps--profile-data
-                            :protected-paths)
-                 1))
-      (should (= (plist-get vulpea-agenda-timestamps--profile-data
-                            :parsed-files)
-                 2))
-      (should (= (plist-get vulpea-agenda-timestamps--profile-data
-                            :relevant-paths)
-                 1))
-      (should (= (plist-get vulpea-agenda-timestamps--profile-data
-                            :eliminated-paths)
-                 1)))))
-
-(ert-deftest vulpea-agenda-timestamps-test-profile-records-completed-agenda ()
-  "Agenda advice publishes timing data after a profiled run."
-  (let ((vulpea-agenda-timestamps-profiling-mode t)
-        (vulpea-agenda-timestamps-last-profile nil)
-        (org-agenda-overriding-arguments nil)
-        (org-agenda-start-day nil)
-        (org-agenda-start-on-weekday nil))
-    (should
-     (eq (vulpea-agenda-timestamps--agenda-run-advice
-          (lambda (&rest _args)
-            (vulpea-agenda-timestamps--profile-add :input-paths 2)
-            'agenda-result)
-          nil "2026-10-25" 7 nil)
-         'agenda-result))
-    (should (numberp
-             (plist-get vulpea-agenda-timestamps-last-profile :future-from)))
-    (should (= (plist-get vulpea-agenda-timestamps-last-profile :input-paths)
-               2))
-    (should (numberp
-             (plist-get vulpea-agenda-timestamps-last-profile
-                        :total-seconds)))))
-
-(ert-deftest vulpea-agenda-timestamps-test-profile-report-format ()
-  "Profile reports expose timings, counts, and a cleanup signal."
-  (let ((report
-         (vulpea-agenda-timestamps--format-profile
-          '(:future-from 20261025
-            :total-seconds 1.0 :query-seconds 0.1 :query-count 2
-            :filter-seconds 0.2 :filter-calls 1 :parse-seconds 0.1
-            :suppressed-filter-calls 3
-            :parsed-files 4 :input-paths 10 :timestamp-candidates 5
-            :protected-paths 1 :inspected-paths 4 :relevant-paths 2
-            :eliminated-paths 2 :output-paths 8))))
-    (should (string-match-p "Relevance: today and future" report))
-    (should-not (string-match-p "Interval:" report))
-    (should (string-match-p "Suppressed nested filters: 3" report))
-    (should (string-match-p "Eliminated candidates: 2 (40.0%)" report))
-    (should (string-match-p "compare another profile" report))))
-
 (ert-deftest vulpea-agenda-timestamps-test-set-buffer-tag-adds ()
   "Tag synchronization preserves existing tags while adding the candidate."
   (let ((tags '("todo")))
@@ -398,7 +119,7 @@
       (should-not (vulpea-agenda-timestamps--set-buffer-tag t)))))
 
 (ert-deftest vulpea-agenda-timestamps-test-set-buffer-tag-removes ()
-  "Tag synchronization removes only the candidate tag."
+  "Tag synchronization removes only the managed timestamp tag."
   (let ((tags '("todo" "timestamp" "project")))
     (cl-letf (((symbol-function
                 'vulpea-agenda-timestamps--buffer-file-tags)
@@ -439,7 +160,7 @@
       (delete-file file))))
 
 (ert-deftest vulpea-agenda-timestamps-test-cleanup-never-adds-tag ()
-  "Remove-only synchronization does not add a missing candidate tag."
+  "Remove-only synchronization does not add a missing timestamp tag."
   (let ((file (make-temp-file "vulpea-agenda-timestamps-" nil ".org")))
     (unwind-protect
         (cl-letf (((symbol-function

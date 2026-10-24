@@ -1,4 +1,4 @@
-;;; vulpea-agenda-timestamps.el --- Timestamp-based Vulpea agenda filtering -*- lexical-binding: t; -*-
+;;; vulpea-agenda-timestamps.el --- Timestamp tags for Vulpea notes -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026 Sunao Kaneko
 
@@ -6,7 +6,7 @@
 ;; Maintainer: Sunao Kaneko <sunao.kaneko@protonmail.com>
 ;; Version: 0.1.0
 ;; Package-Requires: ((emacs "30.2") (vulpea "2.5.0")
-;;                    (vulpea-agenda "0.1") (vulpea-auto-tag "0.1"))
+;;                    (vulpea-auto-tag "0.1"))
 ;; Keywords: outlines, calendar
 ;; URL: https://github.com/ama0uuuu/vulpea-agenda-timestamps
 ;; SPDX-License-Identifier: GPL-3.0-or-later
@@ -15,13 +15,12 @@
 
 ;;; Commentary:
 
-;; Reduce the number of Org files scanned for an agenda by using Vulpea's tag
-;; index to discover notes containing relevant ordinary active timestamps.
+;; Maintain a Vulpea file tag for notes containing relevant ordinary active
+;; timestamps, with explicit reindex and stale-tag cleanup commands.
 
 ;;; Code:
 
 (require 'org)
-(require 'org-agenda)
 (require 'org-element)
 (require 'seq)
 (require 'subr-x)
@@ -33,30 +32,11 @@
 (declare-function vulpea-buffer-prop-set "vulpea-buffer" (name value))
 (declare-function vulpea-note-path "vulpea-note" (note))
 
-(defvar vulpea-agenda-tags)
-
-(defvar vulpea-agenda-timestamps--agenda-cache nil
-  "Memoization table dynamically bound during one agenda construction.")
-
 (defvar vulpea-agenda-timestamps--maintenance-running nil
   "Non-nil while a reindex or cleanup command is processing files.")
 
-(defvar vulpea-agenda-timestamps--profile-data nil
-  "Profiling data dynamically bound during one agenda construction.")
-
-(defvar vulpea-agenda-timestamps--filter-advice-running nil
-  "Non-nil while the outermost path advice obtains raw Vulpea paths.")
-
-(defvar vulpea-agenda-timestamps--filter-running nil
-  "Non-nil while an outer timestamp path filter is evaluating candidates.")
-
-(defvar vulpea-agenda-timestamps-last-profile nil
-  "Metrics from the most recent profiled agenda construction.")
-
-(defvar vulpea-agenda-timestamps-profiling-mode nil)
-
 (defgroup vulpea-agenda-timestamps nil
-  "Timestamp-based agenda file selection for Vulpea."
+  "Timestamp tag maintenance for Vulpea notes."
   :group 'org
   :prefix "vulpea-agenda-timestamps-")
 
@@ -64,21 +44,6 @@
   "Vulpea tag for notes containing relevant ordinary active timestamps."
   :type 'string
   :group 'vulpea-agenda-timestamps)
-
-(defun vulpea-agenda-timestamps--profile-add (property amount)
-  "Add AMOUNT to profiling PROPERTY when profiling is active."
-  (when vulpea-agenda-timestamps--profile-data
-    (setf (plist-get vulpea-agenda-timestamps--profile-data property)
-          (+ (or (plist-get vulpea-agenda-timestamps--profile-data property) 0)
-             amount))))
-
-(defun vulpea-agenda-timestamps--profile-time (property function)
-  "Call FUNCTION and add its elapsed seconds to profiling PROPERTY."
-  (let ((started (current-time)))
-    (unwind-protect
-        (funcall function)
-      (vulpea-agenda-timestamps--profile-add
-       property (float-time (time-subtract (current-time) started))))))
 
 (defun vulpea-agenda-timestamps--date-key (year month day)
   "Return a sortable integer date key for YEAR, MONTH, and DAY."
@@ -142,277 +107,13 @@ is available primarily for deterministic tests."
         (vulpea-agenda-timestamps--timestamp-relevant-p timestamp today-key))
       nil t)))
 
-(defun vulpea-agenda-timestamps--inspect-file (path predicate)
-  "Call PREDICATE in PATH's current or temporary Org buffer."
-  (let ((buffer (find-buffer-visiting path)))
-    (if buffer
-        (with-current-buffer buffer
-          (save-restriction
-            (widen)
-            (funcall predicate)))
-      (with-temp-buffer
-        (insert-file-contents path)
-        (delay-mode-hooks (org-mode))
-        (funcall predicate)))))
-
-(defun vulpea-agenda-timestamps-file-relevant-p (path &optional now)
-  "Return non-nil when the Org file at PATH has a relevant timestamp.
-Use the current contents of an existing visiting buffer.  Otherwise read PATH
-into a temporary Org buffer without running mode hooks.  NOW is forwarded to
-`vulpea-agenda-timestamps-buffer-relevant-p'.  Retain the file conservatively
-and display a warning if it cannot be inspected."
-  (condition-case error-data
-      (vulpea-agenda-timestamps--inspect-file
-       path (lambda () (vulpea-agenda-timestamps-buffer-relevant-p now)))
-    (error
-     (display-warning
-      'vulpea-agenda-timestamps
-      (format "Could not inspect %s; retaining it: %s"
-              path (error-message-string error-data)))
-     t)))
-
-(defun vulpea-agenda-timestamps--memoize (key function)
-  "Return cached value for KEY, or call and cache FUNCTION.
-Only cache when `vulpea-agenda-timestamps--agenda-cache' is dynamically bound
-to a hash table."
-  (if (not (hash-table-p vulpea-agenda-timestamps--agenda-cache))
-      (funcall function)
-    (let ((missing (make-symbol "missing")))
-      (let ((value (gethash key vulpea-agenda-timestamps--agenda-cache missing)))
-        (if (eq value missing)
-            (let ((computed (funcall function)))
-              (puthash key computed vulpea-agenda-timestamps--agenda-cache)
-              computed)
-          value)))))
-
 (defun vulpea-agenda-timestamps--tagged-paths (tags)
   "Return unique paths of Vulpea notes having any of TAGS."
   (when tags
-    (vulpea-agenda-timestamps--memoize
-     (list 'tagged-paths tags)
-     (lambda ()
-       (vulpea-agenda-timestamps--profile-add :query-count 1)
-       (vulpea-agenda-timestamps--profile-time
-        :query-seconds
-        (lambda ()
-          (require 'vulpea-db-query)
-          (seq-uniq
-           (mapcar #'vulpea-note-path
-                   (vulpea-db-query-by-tags-some tags)))))))))
-
-(defun vulpea-agenda-timestamps--other-agenda-tags ()
-  "Return configured Vulpea agenda tags other than the timestamp tag."
-  (seq-remove
-   (lambda (tag) (string= tag vulpea-agenda-timestamps-tag))
-   vulpea-agenda-tags))
-
-(defun vulpea-agenda-timestamps--filter-note-paths-uncached (paths)
-  "Filter stale timestamp-only files from Vulpea agenda PATHS.
-Files carrying another tag from `vulpea-agenda-tags' are retained without
-timestamp inspection.  PATHS not carrying the configured timestamp tag are
-also retained."
-  (vulpea-agenda-timestamps--profile-time
-   :filter-seconds
-   (lambda ()
-     (vulpea-agenda-timestamps--profile-add :filter-calls 1)
-     (vulpea-agenda-timestamps--profile-add :input-paths (length paths))
-     (if (not (member vulpea-agenda-timestamps-tag vulpea-agenda-tags))
-         (progn
-           (vulpea-agenda-timestamps--profile-add :output-paths (length paths))
-           paths)
-       (let ((timestamp-paths
-              (vulpea-agenda-timestamps--tagged-paths
-               (list vulpea-agenda-timestamps-tag)))
-             (other-paths
-              (vulpea-agenda-timestamps--tagged-paths
-               (vulpea-agenda-timestamps--other-agenda-tags))))
-         (let ((filtered
-                (seq-filter
-                 (lambda (path)
-                   (if (not (member path timestamp-paths))
-                       t
-                     (vulpea-agenda-timestamps--profile-add
-                      :timestamp-candidates 1)
-                     (if (member path other-paths)
-                         (progn
-                           (vulpea-agenda-timestamps--profile-add
-                            :protected-paths 1)
-                           t)
-                       (vulpea-agenda-timestamps--profile-add
-                        :inspected-paths 1)
-                       (let ((relevant
-                              (vulpea-agenda-timestamps--memoize
-                               (list 'file-relevant path)
-                               (lambda ()
-                                 (vulpea-agenda-timestamps--profile-add
-                                  :parsed-files 1)
-                                 (vulpea-agenda-timestamps--profile-time
-                                  :parse-seconds
-                                  (lambda ()
-                                    (vulpea-agenda-timestamps-file-relevant-p
-                                     path)))))))
-                         (if relevant
-                             (progn
-                               (vulpea-agenda-timestamps--profile-add
-                                :relevant-paths 1)
-                               t)
-                           (vulpea-agenda-timestamps--profile-add
-                            :eliminated-paths 1)
-                           nil)))))
-                 paths)))
-           (vulpea-agenda-timestamps--profile-add
-           :output-paths (length filtered))
-           filtered))))))
-
-(defun vulpea-agenda-timestamps--filter-note-paths (paths)
-  "Return future-relevant Vulpea agenda PATHS, cached for one agenda run."
-  (if (or vulpea-agenda-timestamps--filter-advice-running
-          vulpea-agenda-timestamps--filter-running)
-      (progn
-        (vulpea-agenda-timestamps--profile-add :suppressed-filter-calls 1)
-        paths)
-    (vulpea-agenda-timestamps--memoize
-     (list 'filtered-paths paths vulpea-agenda-tags
-           vulpea-agenda-timestamps-tag)
-     (lambda ()
-       (let ((vulpea-agenda-timestamps--filter-running t))
-         (vulpea-agenda-timestamps--filter-note-paths-uncached paths))))))
-
-(defun vulpea-agenda-timestamps--agenda-run-advice
-    (original-function &rest args)
-  "Call ORIGINAL-FUNCTION with one cache and profile shared across ARGS.
-Nested agenda entry points reuse the surrounding state.  This is important for
-custom block agendas, which prepare files before running their individual
-`org-agenda-list' blocks."
-  (if (hash-table-p vulpea-agenda-timestamps--agenda-cache)
-      (apply original-function args)
-    (let* ((vulpea-agenda-timestamps--agenda-cache
-            (make-hash-table :test #'equal))
-           (vulpea-agenda-timestamps--profile-data
-            (and vulpea-agenda-timestamps-profiling-mode
-                 (list :future-from
-                       (vulpea-agenda-timestamps--today-key))))
-           (started (and vulpea-agenda-timestamps--profile-data
-                         (current-time))))
-      (unwind-protect
-          (apply original-function args)
-        (when vulpea-agenda-timestamps--profile-data
-          (vulpea-agenda-timestamps--profile-add
-           :total-seconds (float-time (time-subtract (current-time) started)))
-          (setq vulpea-agenda-timestamps-last-profile
-                (copy-tree vulpea-agenda-timestamps--profile-data)))))))
-
-(defun vulpea-agenda-timestamps--filter-note-paths-advice
-    (original-function &rest args)
-  "Filter paths returned by ORIGINAL-FUNCTION called with ARGS."
-  (if vulpea-agenda-timestamps--filter-advice-running
-      (apply original-function args)
-    (let (paths)
-      (let ((vulpea-agenda-timestamps--filter-advice-running t))
-        (setq paths (apply original-function args)))
-      (vulpea-agenda-timestamps--filter-note-paths paths))))
-
-;;;###autoload
-(define-minor-mode vulpea-agenda-timestamps-mode
-  "Filter stale timestamp-only notes from `vulpea-agenda' results."
-  :global t
-  :group 'vulpea-agenda-timestamps
-  (if vulpea-agenda-timestamps-mode
-      (progn
-        (require 'vulpea-agenda)
-        (advice-add 'vulpea-agenda--get-note-paths :around
-                    #'vulpea-agenda-timestamps--filter-note-paths-advice)
-        (advice-add 'org-agenda :around
-                    #'vulpea-agenda-timestamps--agenda-run-advice)
-        (advice-add 'org-agenda-run-series :around
-                    #'vulpea-agenda-timestamps--agenda-run-advice)
-        (advice-add 'org-agenda-list :around
-                    #'vulpea-agenda-timestamps--agenda-run-advice))
-    (advice-remove 'vulpea-agenda--get-note-paths
-                   #'vulpea-agenda-timestamps--filter-note-paths-advice)
-    (advice-remove 'org-agenda
-                   #'vulpea-agenda-timestamps--agenda-run-advice)
-    (advice-remove 'org-agenda-run-series
-                   #'vulpea-agenda-timestamps--agenda-run-advice)
-    (advice-remove 'org-agenda-list
-                   #'vulpea-agenda-timestamps--agenda-run-advice)))
-
-;;;###autoload
-(define-minor-mode vulpea-agenda-timestamps-profiling-mode
-  "Record timing and path-count metrics for timestamp-filtered agendas.
-After constructing an agenda, use
-`vulpea-agenda-timestamps-profile-report' to inspect the latest metrics."
-  :global t
-  :group 'vulpea-agenda-timestamps
-  (when vulpea-agenda-timestamps-profiling-mode
-    (setq vulpea-agenda-timestamps-last-profile nil)))
-
-(defun vulpea-agenda-timestamps--profile-number (profile property)
-  "Return numeric PROPERTY from PROFILE, defaulting to zero."
-  (or (plist-get profile property) 0))
-
-(defun vulpea-agenda-timestamps--format-profile (profile)
-  "Format PROFILE as a human-readable performance report."
-  (let* ((candidates (vulpea-agenda-timestamps--profile-number
-                      profile :timestamp-candidates))
-         (eliminated (vulpea-agenda-timestamps--profile-number
-                      profile :eliminated-paths))
-         (eliminated-percent
-          (if (zerop candidates)
-              0.0
-            (* 100.0 (/ (float eliminated) candidates)))))
-    (format
-     (concat "Vulpea agenda timestamp profile\n\n"
-             "Relevance: today and future (from %s)\n"
-             "Total agenda: %.3f s\n"
-             "Candidate queries: %.3f s (%d uncached queries)\n"
-             "Timestamp filtering: %.3f s (%d calls)\n"
-             "Suppressed nested filters: %d\n"
-             "File parsing: %.3f s (%d unique files)\n\n"
-             "Input path evaluations: %d\n"
-             "Timestamp candidates: %d\n"
-             "Protected by other tags: %d\n"
-             "Inspected candidates: %d\n"
-             "Relevant candidates: %d\n"
-             "Eliminated candidates: %d (%.1f%%)\n"
-             "Output path evaluations: %d\n\n"
-             "Cleanup signal: %s\n")
-     (or (plist-get profile :future-from) "unknown")
-     (vulpea-agenda-timestamps--profile-number profile :total-seconds)
-     (vulpea-agenda-timestamps--profile-number profile :query-seconds)
-     (vulpea-agenda-timestamps--profile-number profile :query-count)
-     (vulpea-agenda-timestamps--profile-number profile :filter-seconds)
-     (vulpea-agenda-timestamps--profile-number profile :filter-calls)
-     (vulpea-agenda-timestamps--profile-number
-      profile :suppressed-filter-calls)
-     (vulpea-agenda-timestamps--profile-number profile :parse-seconds)
-     (vulpea-agenda-timestamps--profile-number profile :parsed-files)
-     (vulpea-agenda-timestamps--profile-number profile :input-paths)
-     candidates
-     (vulpea-agenda-timestamps--profile-number profile :protected-paths)
-     (vulpea-agenda-timestamps--profile-number profile :inspected-paths)
-     (vulpea-agenda-timestamps--profile-number profile :relevant-paths)
-     eliminated eliminated-percent
-     (vulpea-agenda-timestamps--profile-number profile :output-paths)
-     (cond
-      ((zerop eliminated) "no stale candidates were observed")
-      ((< (vulpea-agenda-timestamps--profile-number profile :parse-seconds)
-          (* 0.05 (vulpea-agenda-timestamps--profile-number
-                   profile :total-seconds)))
-       "stale parsing was under 5% of total time; automatic cleanup is unlikely to help materially")
-      (t "compare another profile after explicit cleanup before enabling automation")))))
-
-;;;###autoload
-(defun vulpea-agenda-timestamps-profile-report ()
-  "Display metrics from the most recent profiled agenda construction."
-  (interactive)
-  (unless vulpea-agenda-timestamps-last-profile
-    (user-error "No profile available; enable profiling and build an agenda"))
-  (let ((report (vulpea-agenda-timestamps--format-profile
-                 vulpea-agenda-timestamps-last-profile)))
-    (with-help-window "*Vulpea Agenda Timestamp Profile*"
-      (princ report))
-    report))
+    (require 'vulpea-db-query)
+    (seq-uniq
+     (mapcar #'vulpea-note-path
+             (vulpea-db-query-by-tags-some tags)))))
 
 (defun vulpea-agenda-timestamps--all-note-paths ()
   "Return unique paths for all notes currently indexed by Vulpea."
@@ -436,7 +137,7 @@ After constructing an agenda, use
      "filetags" (concat ":" (string-join (seq-uniq tags) ":") ":"))))
 
 (defun vulpea-agenda-timestamps--set-buffer-tag (present)
-  "Ensure the current file-level candidate tag is PRESENT.
+  "Ensure the current file-level timestamp tag is PRESENT.
 Return non-nil when the buffer was changed."
   (let* ((tag vulpea-agenda-timestamps-tag)
          (tags (vulpea-agenda-timestamps--buffer-file-tags))
@@ -453,7 +154,7 @@ Return non-nil when the buffer was changed."
      (nil))))
 
 (defun vulpea-agenda-timestamps--synchronize-file (path &optional remove-only)
-  "Synchronize the candidate tag in PATH and return its outcome.
+  "Synchronize the timestamp tag in PATH and return its outcome.
 The outcome is one of `changed', `unchanged', or `skipped'.  A required edit
 is skipped when PATH already has unsaved changes.  Buffers opened here are
 closed after success; buffers that were already open are left open.  When
@@ -520,7 +221,7 @@ REMOVE-ONLY through to `vulpea-agenda-timestamps--synchronize-file'."
 
 ;;;###autoload
 (defun vulpea-agenda-timestamps-reindex ()
-  "Synchronize the timestamp candidate tag across all indexed Vulpea files.
+  "Synchronize the timestamp tag across all indexed Vulpea files.
 The command is safe to rerun.  It saves only files whose tag changes and skips
 required edits in buffers with unsaved user changes."
   (interactive)
@@ -529,7 +230,7 @@ required edits in buffers with unsaved user changes."
 
 ;;;###autoload
 (defun vulpea-agenda-timestamps-cleanup-stale-tags ()
-  "Remove stale timestamp candidate tags from indexed Vulpea files.
+  "Remove stale timestamp tags from indexed Vulpea files.
 Only files currently carrying `vulpea-agenda-timestamps-tag' are inspected.
 Relevant files and repeaters keep the tag.  The command saves only actual tag
 changes and skips required edits in buffers with unsaved user changes."

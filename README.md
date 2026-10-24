@@ -1,7 +1,7 @@
 # vulpea-agenda-timestamps
 
-An Emacs package for reducing Org Agenda file scanning through Vulpea's indexed
-tags and relevant ordinary active timestamps.
+An Emacs package that maintains a Vulpea file tag for notes containing relevant
+ordinary active timestamps.
 
 `SCHEDULED` and `DEADLINE` timestamps are intentionally excluded because the
 intended workflow discovers their files through `vulpea-auto-tag` and its
@@ -30,22 +30,17 @@ Configure `vulpea-agenda` to query both automatic tags:
 Customize `vulpea-agenda-timestamps-tag` if a different timestamp tag is
 preferred, and use the same value in `vulpea-agenda-tags`.
 
-Finally, enable both agenda modes:
+If you use `vulpea-agenda`, enable its mode to build `org-agenda-files` from
+the configured tags:
 
 ```elisp
 (vulpea-agenda-mode 1)
-(vulpea-agenda-timestamps-mode 1)
 ```
 
-`vulpea-agenda-timestamps-mode` filters only paths contributed by
-`vulpea-agenda`.  Files listed directly in `org-agenda-files` remain untouched.
-A stale timestamp-tagged file is also retained when it carries another tag in
-`vulpea-agenda-tags`, such as `todo`.  Timestamp-only files are retained when
-they contain an ordinary active timestamp today or in the future, even when it
-falls beyond the currently displayed agenda span.  Past-only files are
-filtered out.  Complete filtering results, database queries, and file
-inspections are reused when Org asks for agenda files more than once during the
-same agenda construction.
+This package does not advise Org Agenda or filter files while an agenda is
+built.  Agenda generation therefore uses Vulpea's indexed tags without opening
+and parsing every timestamp-tagged file.  The `vulpea-agenda` package is an
+optional integration, not a dependency of this package.
 
 ## Maintenance
 
@@ -55,40 +50,18 @@ After configuring the automatic tag rule, initialize existing notes once with:
 M-x vulpea-agenda-timestamps-reindex
 ```
 
-The command adds or removes the candidate tag across all files currently
+The command adds or removes the timestamp tag across all files currently
 indexed by Vulpea.  To remove only tags that have become stale over time, run:
 
 ```text
 M-x vulpea-agenda-timestamps-cleanup-stale-tags
 ```
 
-Both commands are safe to rerun, save only files whose candidate tag changes,
+Both commands are safe to rerun, save only files whose timestamp tag changes,
 and report processed, changed, skipped, and failed counts.  A file requiring an
 edit is skipped when its buffer already contains unsaved changes.  Buffers that
 were open beforehand remain open; clean buffers opened by a command are closed
 after processing.
-
-## Profiling
-
-Enable profiling, build a representative date agenda, and display its metrics:
-
-```text
-M-x vulpea-agenda-timestamps-profiling-mode
-M-x org-agenda
-M-x vulpea-agenda-timestamps-profile-report
-```
-
-The report shows the rolling future-relevance boundary and separates total
-agenda, candidate-query, timestamp-filter, and file parsing times.  It also
-reports input paths, timestamp candidates, candidates protected by other tags,
-unique files parsed, and candidates eliminated.
-
-To evaluate persistent stale-tag cleanup, save the first report, run
-`vulpea-agenda-timestamps-cleanup-stale-tags`, and profile the same agenda
-again.  The report treats parsing below 5% of total agenda time as unlikely to
-benefit materially from automatic cleanup.  Agenda construction remains
-read-only; no timer or automatic cleanup is enabled without representative
-measurements showing a worthwhile improvement.
 
 ## Development
 
